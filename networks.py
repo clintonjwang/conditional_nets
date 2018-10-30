@@ -64,31 +64,17 @@ class NaiveCNN(nn.Module):
 
 class MixModelCNN(nn.Module):
     def __init__(self, K):
-        """
-        In the constructor we instantiate two nn.Linear modules and assign them as
-        member variables.
-        """
         super(MixModelCNN, self).__init__()
-        # we want to prevent the variance of the predicted beta distributions from contracting to a singularity
-        # thus we can set a prior in which the inverse standard deviation follows a half-normal distribution
-        sig = 500
-        self.l_reg = 1/(2*sig**2)
-
-        # log normal prior with m+s=ln(100), m-s=ln(.01)
-        #mu = (np.log(100)-np.log(.1))/2
-        #sig = np.log(100)-mu
-        #l_reg = N/2/sig**2
         
-        #torch.log(torch.linspace(.1,6,K, dtype=dtype, requires_grad=True)))
-        #self.a_u = Parameter(torch.randn(1,K, dtype=dtype, requires_grad=True))
-        #self.b_u = Parameter(torch.randn(1,K, dtype=dtype, requires_grad=True))
+        # prior in which the inverse standard deviation has a half-normal distribution
+        # (precision has stretched chi-square dist with k=1)
+        sig = 1000
+        self.l_reg = 1/(2*sig**2)
+        
         self.sigmu_u = Parameter(torch.randn(1,K, dtype=dtype, requires_grad=True))
         self.lnnu_u = Parameter(torch.randn(1,K, dtype=dtype, requires_grad=True))
         self.sigmu_y = Parameter(torch.randn(1,K, dtype=dtype, requires_grad=True))
         self.lnnu_y = Parameter(torch.randn(1,K, dtype=dtype, requires_grad=True))
-        #self.a_y = Parameter(torch.randn(1,K, dtype=dtype, requires_grad=True))
-        #self.b_y = Parameter(torch.randn(1,K, dtype=dtype, requires_grad=True))
-        #self.p_z = Parameter(torch.tensor(torch.log(torch.ones(1,K)/K), dtype=dtype, requires_grad=True))
         
         self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
         self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
@@ -100,20 +86,17 @@ class MixModelCNN(nn.Module):
         self.K = K
 
     def forward(self, x, uy):
-        """
-        xyu must be 3*N
-        """
-        #p_z = self.get_p_z()
+        uy = uy.float()
         
         mu_u = 1/(1+torch.exp(-self.sigmu_u))
         nu_u = torch.exp(self.lnnu_u)
-        self.a_u = torch.log(mu_u*nu_u)
-        self.b_u = torch.log((1-mu_u)*nu_u)
+        a_u = mu_u*nu_u
+        b_u = (1-mu_u)*nu_u
         
         mu_y = 1/(1+torch.exp(-self.sigmu_y))
         nu_y = torch.exp(self.lnnu_y)
-        self.a_y = torch.log(mu_y*nu_y)
-        self.b_y = torch.log((1-mu_y)*nu_y)
+        a_y = mu_y*nu_y
+        b_y = (1-mu_y)*nu_y
         
         x = F.relu(F.max_pool2d(self.conv1(x), 2))
         x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
@@ -125,46 +108,78 @@ class MixModelCNN(nn.Module):
         p_Z_X = F.softmax(self.fc3(x), dim=1)
         #p_X_Z = p_Z_X / p_z # p_x is a constant and hence disappears in the objective function
         
-        U_z = torch.distributions.beta.Beta(torch.exp(self.a_u), torch.exp(self.b_u))
-        Y_z = torch.distributions.beta.Beta(torch.exp(self.a_y), torch.exp(self.b_y))
-        f_YU_z = torch.exp(U_z.log_prob(uy[:,:1].float()) + Y_z.log_prob(uy[:,-1:].float()))
+        U_z = torch.distributions.beta.Beta(a_u, b_u)
+        Y_z = torch.distributions.beta.Beta(a_y, b_y)
+        U_dom = torch.linspace(.001, .999, 10).view(1, -1, 1).cuda()
+        U_sum = torch.exp(U_z.log_prob(U_dom)).sum(1)
+        Y_dom = torch.linspace(.001, .999, 7).view(1, -1, 1).cuda()
+        Y_sum = torch.exp(Y_z.log_prob(Y_dom)).sum(1)
+        f_YU_z = torch.exp(U_z.log_prob(uy[:,:1]) + Y_z.log_prob(uy[:,-1:]))
+        p_YU_z = f_YU_z / U_sum / Y_sum
         
         #p_ZYU = f_YU_z * p_z
-        p_XYU = (p_Z_X * f_YU_z).sum(1)# (p_X_Z * p_ZYU).sum(1)
+        p_XYU = (p_Z_X * p_YU_z).sum(1) # (p_X_Z * p_ZYU).sum(1)
         neg_log_ll = -torch.log(p_XYU).sum()
         
-        # beta dist inverse stdev half-normal prior (precision has stretched chi-square dist with k=1)
         var_U = mu_u * (1-mu_u) / (1+nu_u)
         var_Y = mu_y * (1-mu_y) / (1+nu_y)
-        """var_U = torch.exp(self.a_u) * torch.exp(self.b_u) / (
-                torch.exp(self.a_u) + torch.exp(self.b_u) )**2 / (
-                torch.exp(self.a_u) + torch.exp(self.b_u) + 1)
-        var_Y = torch.exp(self.a_y) * torch.exp(self.b_y) / (
-                torch.exp(self.a_y) + torch.exp(self.b_y) )**2 / (
-                torch.exp(self.a_y) + torch.exp(self.b_y) + 1)"""
         
-        ab_reg = ((1/var_U).sum() + (1/var_Y).sum()) * self.l_reg * x.shape[0]
+        #ab_reg = (((nu_u - 1)**2).sum() + ((nu_y - 1)**2).sum()) * self.l_reg * x.shape[0]
+        ab_reg = ((1/var_U**2).sum() + (1/var_Y**2).sum()) * self.l_reg * x.shape[0]
         
-        return neg_log_ll + ab_reg
+        return neg_log_ll# + ab_reg
+        
+    def pretrain(self, uy):
+        uy = uy.float()
+        
+        mu_u = 1/(1+torch.exp(-self.sigmu_u))
+        nu_u = torch.exp(self.lnnu_u)
+        a_u = mu_u*nu_u
+        b_u = (1-mu_u)*nu_u
+        
+        mu_y = 1/(1+torch.exp(-self.sigmu_y))
+        nu_y = torch.exp(self.lnnu_y)
+        a_y = mu_y*nu_y
+        b_y = (1-mu_y)*nu_y
+        
+        U_z = torch.distributions.beta.Beta(a_u, b_u)
+        Y_z = torch.distributions.beta.Beta(a_y, b_y)
+        U_dom = torch.linspace(.001, .999, 10).view(1, -1, 1).cuda()
+        U_sum = torch.exp(U_z.log_prob(U_dom)).sum(1)
+        Y_dom = torch.linspace(.001, .999, 7).view(1, -1, 1).cuda()
+        Y_sum = torch.exp(Y_z.log_prob(Y_dom)).sum(1)
+        f_YU_z = torch.exp(U_z.log_prob(uy[:,:1]) + Y_z.log_prob(uy[:,-1:]))
+        p_YU_z = f_YU_z / U_sum / Y_sum
+        
+        p_YU = p_YU_z.sum(1) # assume p_z is constant
+        neg_log_ll = -torch.log(p_YU).sum()
+        
+        return neg_log_ll
         
     #def get_p_z(self):
     #    return torch.exp(self.p_z) / torch.exp(self.p_z).sum()
     
-    def classify(self, x, u, num_classes=7):
-        #p_z = self.get_p_z()
-        y = torch.linspace(.001, .999, num_classes).repeat(x.shape[0],1).view(x.shape[0], -1, 1).cuda()
-        u = u.view(-1, 1)
-
+    def get_ab(self, cuda=True):
         mu_u = 1/(1+torch.exp(-self.sigmu_u))
         nu_u = torch.exp(self.lnnu_u)
-        self.a_u = torch.log(mu_u*nu_u)
-        self.b_u = torch.log((1-mu_u)*nu_u)
+        a_u = mu_u*nu_u
+        b_u = (1-mu_u)*nu_u
         
         mu_y = 1/(1+torch.exp(-self.sigmu_y))
         nu_y = torch.exp(self.lnnu_y)
-        self.a_y = torch.log(mu_y*nu_y)
-        self.b_y = torch.log((1-mu_y)*nu_y)
+        a_y = mu_y*nu_y
+        b_y = (1-mu_y)*nu_y
         
+        if not cuda:
+            a_u, b_u, a_y, b_y = a_u.detach().cpu().numpy()[0], b_u.detach().cpu().numpy()[0], a_y.detach().cpu().numpy()[0], b_y.detach().cpu().numpy()[0]
+        
+        return a_u, b_u, a_y, b_y
+    
+    def classify(self, x, u, num_classes=7):
+        a_u, b_u, a_y, b_y = self.get_ab()
+        y = torch.linspace(.001, .999, num_classes).view(1, -1, 1).cuda()
+        u = u.view(-1, 1)
+
         x = torch.reshape(x, (x.shape[0], 1, *x.shape[1:]))
         x = F.relu(F.max_pool2d(self.conv1(x), 2))
         x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
@@ -175,8 +190,8 @@ class MixModelCNN(nn.Module):
         x = F.dropout(x, training=self.training)
         p_Z_X = F.softmax(self.fc3(x), dim=1).view(x.shape[0], 1, self.K)
 
-        U_z = torch.distributions.beta.Beta(torch.exp(self.a_u), torch.exp(self.b_u))
-        Y_z = torch.distributions.beta.Beta(torch.exp(self.a_y), torch.exp(self.b_y))
+        U_z = torch.distributions.beta.Beta(a_u, b_u)
+        Y_z = torch.distributions.beta.Beta(a_y, b_y)
         f_U_Z = torch.exp(U_z.log_prob(u)).view(x.shape[0], 1, self.K)
         f_Y_Z = torch.exp(Y_z.log_prob(y))
 
