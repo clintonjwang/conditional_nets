@@ -1,67 +1,10 @@
-from torch import relu
 import torch
 from torch.nn.parameter import Parameter
-import torch.distributions.beta
 import torch.nn.functional as F
-import torch.utils.data as data
-from torchvision import datasets, transforms
+import torch.distributions.beta
+
+import niftiutils.nn.submodules as subm
 nn = torch.nn
-dtype = torch.float
-
-class MnistCNN(nn.Module):
-    def __init__(self):
-        super(MnistCNN, self).__init__()        
-        self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
-        self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
-        self.conv2_drop = nn.Dropout2d(p=.2)
-        self.fc1 = nn.Linear(320, 64)
-        self.fc2 = nn.Linear(64, 10)
-
-    def forward(self, x):
-        x = x.view(x.shape[0], 1, 28, 28)
-        x = F.relu(F.max_pool2d(self.conv1(x), 2))
-        x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
-        x = x.view(-1, 320)
-        x = F.relu(self.fc1(x))
-        x = F.dropout(x, training=self.training)
-        return F.softmax(self.fc2(x), dim=1)
-
-    
-class NaiveCNN(nn.Module):
-    def __init__(self, loss_type='mse', num_vars=1):
-        super(NaiveCNN, self).__init__()        
-        self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
-        self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
-        self.conv2_drop = nn.Dropout2d(p=.2)
-        self.fc1 = nn.Linear(320, 128)
-        self.fc2 = nn.Linear(128+num_vars, 128)
-        self.fc3 = nn.Linear(128, 64)
-        self.fc4 = nn.Linear(64, 1 if loss_type == 'mse' else 7)
-        self.bn1 = nn.BatchNorm1d(128)
-        self.loss_type = loss_type
-        self.num_vars = num_vars
-
-    def forward(self, x, u):      
-        u = u.view(x.shape[0], self.num_vars)
-        x = F.relu(F.max_pool2d(self.conv1(x), 2))
-        x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
-        x = x.view(-1, 320)
-        ux = F.relu(self.fc1(x))
-        ux = self.bn1(ux)
-        ux = torch.cat([ux, u], 1)
-        ux = F.relu(self.fc2(ux))
-        ux = F.dropout(ux, training=self.training)
-        ux = F.relu(self.fc3(ux))
-        p_Y_UX = self.fc4(ux)
-        if self.loss_type == 'mse':
-            p_Y_UX = p_Y_UX.view(-1)
-        
-        return p_Y_UX
-        
-    def classify(self, x, u):
-        x = x.view(x.shape[0], 1, 28, 28)
-        return self.forward(x,u)
-
 
 class MixModelCNN(nn.Module):
     def __init__(self, K, hidden_var=False, num_vars=1):
@@ -229,45 +172,109 @@ class MixModelCNN(nn.Module):
         return p_Y_UX#.max(1)
     
     
-class MixModel(torch.nn.Module):
-    """Only the mixture model, without images. Outdated."""
-    def __init__(self, K):
+class TestModel(NaiveCNN):
+    def __init__(self, K=128):
         """
         In the constructor we instantiate two nn.Linear modules and assign them as
         member variables.
         """
-        super(MixModel, self).__init__()
-        self.a_u = Parameter(torch.tensor(torch.randn(1,K), dtype=dtype, requires_grad=True))
-        self.b_u = Parameter(torch.tensor(torch.randn(1,K), dtype=dtype, requires_grad=True))
-        self.a_y = Parameter(torch.tensor(torch.randn(1,K), dtype=dtype, requires_grad=True))
-        self.b_y = Parameter(torch.tensor(torch.randn(1,K), dtype=dtype, requires_grad=True))
-        self.p_z = Parameter(torch.tensor(torch.ones(1,K)/K, dtype=dtype, requires_grad=True))
+        super(TestModel, self).__init__(loss_type='xent')
+        for param in self.parameters():
+            param.requires_grad = False
+            
+        sig = 10000
+        self.l_reg = 1/(2*sig**2)
+        
+        self.sigmu_u = Parameter(torch.randn(1,K, dtype=dtype, requires_grad=True))
+        self.lnnu_u = Parameter(torch.randn(1,K, dtype=dtype, requires_grad=True))
+            
+        self.sigmu_y = Parameter(torch.randn(1,K, dtype=dtype, requires_grad=True))
+        self.lnnu_y = Parameter(torch.randn(1,K, dtype=dtype, requires_grad=True))
+        
+        self.K = K
+        self.eps = .0001
 
-    def forward(self, yu):
-        """
-        yu must be 2*N
-        """
-        U = torch.distributions.beta.Beta(torch.exp(self.a_u), torch.exp(self.b_u))
-        Y = torch.distributions.beta.Beta(torch.exp(self.a_y), torch.exp(self.b_y))
-        f_YU = torch.exp(Y.log_prob(yu[:,:1]) + U.log_prob(yu[:,-1:]))
-        neg_log_ll = -torch.log((self.p_z*f_YU).sum(1)).sum()
+    def forward(self, x, uy):
+        x = F.relu(F.max_pool2d(self.conv1(x), 2))
+        x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
+        x = x.view(-1, 320)
+        x = F.relu(self.fc1(x))
+        x = self.bn1(x)
+        #u = uy[:,:1].view(x.shape[0], 1)
+        #x = torch.cat([x, u], 1)
+        p_Z_X = F.softmax(x, dim=1)
         
-        # log normal prior over a,b
-        #ab_reg = ((torch.cat([self.a_u, self.a_y, self.b_u, self.b_y]) - mu)**2).sum() * l_reg
+        uy = uy.float()
         
-        # beta dist inverse stdev half-normal prior (precision has stretched chi-square dist with k=1)
-        var_beta_u = torch.exp(self.a_u) * torch.exp(self.b_u) / (
-                torch.exp(self.a_u) + torch.exp(self.b_u) )**2 / (
-                torch.exp(self.a_u) + torch.exp(self.b_u) + 1)
+        mu_u = 1/(1+torch.exp(-self.sigmu_u))
+        nu_u = torch.exp(self.lnnu_u)
+        a_u = mu_u*nu_u
+        b_u = (1-mu_u)*nu_u
         
-        var_beta_y = torch.exp(self.a_y) * torch.exp(self.b_y) / (
-                torch.exp(self.a_y) + torch.exp(self.b_y) )**2 / (
-                torch.exp(self.a_y) + torch.exp(self.b_y) + 1)
+        mu_y = 1/(1+torch.exp(-self.sigmu_y))
+        nu_y = torch.exp(self.lnnu_y)
+        a_y = mu_y*nu_y
+        b_y = (1-mu_y)*nu_y
         
-        ab_reg = ((1/var_beta_u).sum() + (1/var_beta_y).sum()) * l_reg
+        
+        U_z = torch.distributions.beta.Beta(a_u, b_u)
+        Y_z = torch.distributions.beta.Beta(a_y, b_y)
+        U_dom = torch.linspace(.001, .999, 10).view(1, -1, 1).cuda() #Z is in dim 2, var is dim 3
+        U_sum = torch.exp(U_z.log_prob(U_dom)).sum(1) + self.eps # sum over temporary dimension
+        Y_dom = torch.linspace(.001, .999, 7).view(1, -1, 1).cuda()
+        Y_sum = torch.exp(Y_z.log_prob(Y_dom)).sum(1) + self.eps
+        
+        f_YU_z = torch.exp(U_z.log_prob(uy[:,:1]) + Y_z.log_prob(uy[:,-1:]))
+        p_YU_z = f_YU_z / U_sum / Y_sum
+        
+        p_XYU = (p_Z_X * p_YU_z).sum(1) # (p_X_Z * p_ZYU).sum(1)
+        neg_log_ll = -torch.log(p_XYU).sum()
+        
+        var_U = mu_u * (1-mu_u) / (1+nu_u)
+        var_Y = mu_y * (1-mu_y) / (1+nu_y)
+        
+        ab_reg = ((1/var_U**2).sum() + (1/var_Y**2).sum()) * self.l_reg * x.shape[0]
         
         return neg_log_ll + ab_reg
+    
+    def get_ab(self, cuda=True):
+        mu_u = 1/(1+torch.exp(-self.sigmu_u))
+        nu_u = torch.exp(self.lnnu_u)
+        a_u = mu_u*nu_u
+        b_u = (1-mu_u)*nu_u
+        
+        mu_y = 1/(1+torch.exp(-self.sigmu_y))
+        nu_y = torch.exp(self.lnnu_y)
+        a_y = mu_y*nu_y
+        b_y = (1-mu_y)*nu_y
+        
+        if not cuda:
+            a_u, b_u, a_y, b_y = a_u.detach().cpu().numpy()[0], b_u.detach().cpu().numpy()[0], a_y.detach().cpu().numpy()[0], b_y.detach().cpu().numpy()[0]
+        
+        return a_u, b_u, a_y, b_y
+    
+    def classify(self, x, u, num_classes=7):
+        a_u, b_u, a_y, b_y = self.get_ab()
+        y = torch.linspace(.001, .999, num_classes).view(1, -1, 1).cuda()
+        u = u.view(-1, 1)
 
+        x = F.relu(F.max_pool2d(self.conv1(x), 2))
+        x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
+        x = x.view(-1, 320)
+        x = F.relu(self.fc1(x))
+        x = self.bn1(x)
+        p_Z_X = F.softmax(x, dim=1).view(x.shape[0], 1, self.K)
+
+        U_z = torch.distributions.beta.Beta(a_u, b_u)
+        Y_z = torch.distributions.beta.Beta(a_y, b_y)
+        f_U_Z = torch.exp(U_z.log_prob(u)).view(x.shape[0], 1, self.K)
+        f_Y_Z = torch.exp(Y_z.log_prob(y))
+
+        p_Z_UX = f_U_Z * p_Z_X # this should be divided by f_U_X, but that is a constant since X and U are given
+        f_Y_UX = (f_Y_Z * p_Z_UX).sum(2)
+        p_Y_UX = f_Y_UX / f_Y_UX.sum(1, keepdim=True)
+
+        return p_Y_UX#.max(1)
     
 class ProbClipper(object):
     """Unused."""
