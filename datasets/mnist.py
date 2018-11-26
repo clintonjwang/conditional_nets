@@ -19,11 +19,11 @@ class MnistDS(torch_data.MNIST):
         if train:
             self.imgs = self.train_data
             self.labels = self.train_labels
-            fn = join(self.root, 'train_%s.npy' % args['model_name'])
+            fn = join(self.root, '%s_train.npy' % args['model_name'])
         else:
             self.imgs = self.test_data
             self.labels = self.test_labels
-            fn = join(self.root, 'test_%s.npy' % args['model_name'])
+            fn = join(self.root, '%s_val.npy' % args['model_name'])
         
         if args['refresh_data'] or not exists(fn):
             self.get_cls_data(f=args['f'], noise=args['noise'], mode=args['context_dist'], fn=fn)

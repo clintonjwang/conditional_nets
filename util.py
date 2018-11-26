@@ -83,7 +83,14 @@ def pred_post(pred, xu):
     
 def kl_div(post1, post2, pX, pU):
     """Posteriors of size (n_cls*nX*nU)"""
-    return (post1 * pX.reshape(1,-1,1) * pU.reshape(1,1,-1) * np.log(post1/(post2+1e-6))).sum()
+    return np.nanmax([0,(post1 * pX.reshape(1,-1,1) * pU.reshape(1,1,-1) * np.log(post1/(post2+1e-6))).sum()])
+    
+def js_div(post1, post2, pX, pU):
+    """Posteriors of size (n_cls*nX*nU)"""
+    M = (post1+post2)/2
+    pXU = pX.reshape(1,-1,1) * pU.reshape(1,1,-1)
+    return np.nanmax([0,(post1 * pXU * np.log(post1/(M+1e-6))).sum()]) + np.nanmax(
+                        [0,(post2 * pXU * np.log(post2/(M+1e-6))).sum()]) 
     
 """def kl_div(pred_post, true_post, emp_post, pX, pU):
     #Predicted posterior (n_cls*nX*nU)

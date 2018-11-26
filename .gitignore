@@ -1,4 +1,9 @@
 data
+datasets
+history
+logs
+*.npy
+*.csv
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -7,29 +7,35 @@ class BaseCNN(nn.Module):
     def __init__(self, dims=(1,28,28), n_cls=10):
         super(BaseCNN, self).__init__()
         self.dims = dims
-        self.z_dim = ((dims[1]//4) * (dims[2]//4) * 64)
         self.conv = nn.Sequential(
-            nn.Conv2d(dims[0], 32, kernel_size=5, padding=2),
-            nn.MaxPool2d(2),
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(.2),
-            nn.Conv2d(32, 64, kernel_size=5, padding=2),
-            nn.MaxPool2d(2),
-            nn.BatchNorm2d(64),
-            nn.LeakyReLU(.2)
+            nn.Dropout2d(.2),
+            nn.Conv2d(dims[0], 96, kernel_size=3),
+            nn.ReLU(True),
+            nn.Conv2d(96, 96, kernel_size=3),
+            nn.ReLU(True),
+            nn.Conv2d(96, 96, kernel_size=3, stride=2),
+            nn.Dropout2d(.5),
+            nn.ReLU(True),
+            nn.Conv2d(96, 192, kernel_size=3),
+            nn.ReLU(True),
+            nn.Conv2d(192, 192, kernel_size=3),
+            nn.ReLU(True),
+            nn.Conv2d(192, 192, kernel_size=3, stride=2),
+            nn.Dropout2d(.5),
+            nn.ReLU(True),
+            nn.Conv2d(192, 192, kernel_size=3),
+            nn.ReLU(True),
+            nn.Conv2d(192, 192, kernel_size=1),
+            nn.ReLU(True)
         )
         self.cls = nn.Sequential(
-            nn.Linear(self.z_dim, 128),
-            nn.Dropout(.2),
-            nn.ReLU(True),
-            nn.Linear(128, n_cls)
+            nn.Conv2d(192, n_cls, kernel_size=1),
+            nn.AdaptiveAvgPool2d(1)
         )
 
     def forward(self, x):
-        x = x.view(x.shape[0], *self.dims)
         x = self.conv(x)
-        x = x.view(x.size(0), -1)
-        x = self.cls(x)
+        x = self.cls(x).view(x.size(0), -1)
         return x
 
 
@@ -41,8 +47,9 @@ class FilmCNN(BaseCNN):
             nn.Dropout(.2),
             nn.ReLU(True)
         )
+        self.global_pool = nn.AdaptiveAvgPool2d(1)
         self.film = nn.Sequential(
-            nn.Linear(self.z_dim+64, 128),
+            nn.Linear(192+64, 128),
             nn.Dropout(.2),
             nn.ReLU(True),
             nn.Linear(128, n_out)
@@ -50,7 +57,7 @@ class FilmCNN(BaseCNN):
 
     def forward(self, x, u):
         x = self.conv(x)
-        x = x.view(x.size(0), -1)
+        x = self.global_pool(x).view(x.size(0), -1)
         u = self.pre_film(u)
         
         ux = torch.cat([u, x], 1)
