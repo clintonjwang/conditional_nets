@@ -7,20 +7,21 @@ class BaseCNN(nn.Module):
     def __init__(self, dims=(1,28,28), n_cls=10):
         super(BaseCNN, self).__init__()
         self.dims = dims
-        self.z_dim = (dims[1]//4 * dims[2]//4 * 16)
+        self.z_dim = ((dims[1]//4) * (dims[2]//4) * 64)
         self.conv = nn.Sequential(
-            nn.Conv2d(dims[0], 16, kernel_size=5, padding=2),
+            nn.Conv2d(dims[0], 32, kernel_size=5, padding=2),
             nn.MaxPool2d(2),
-            nn.ReLU(True),
-            nn.Conv2d(16, 16, kernel_size=5, padding=2),
-            nn.Dropout2d(.2),
+            nn.BatchNorm2d(32),
+            nn.LeakyReLU(.2),
+            nn.Conv2d(32, 64, kernel_size=5, padding=2),
             nn.MaxPool2d(2),
-            nn.ReLU(True)
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(.2)
         )
         self.cls = nn.Sequential(
             nn.Linear(self.z_dim, 128),
-            nn.ReLU(True),
             nn.Dropout(.2),
+            nn.ReLU(True),
             nn.Linear(128, n_cls)
         )
 
@@ -33,20 +34,19 @@ class BaseCNN(nn.Module):
 
 
 class FilmCNN(BaseCNN):
-    def __init__(self, num_vars=1, n_cls=18):
-        super(ConcatCNN, self).__init__()
+    def __init__(self, n_cls=10, dims=(1,28,28), n_context=10, n_out=19):
+        super(FilmCNN, self).__init__(dims=dims, n_cls=n_cls)
         self.pre_film = nn.Sequential(
-            nn.Linear(num_vars, 64),
-            nn.BatchNorm1d(64),
+            nn.Linear(n_context, 64),
+            nn.Dropout(.2),
             nn.ReLU(True)
         )
         self.film = nn.Sequential(
             nn.Linear(self.z_dim+64, 128),
-            nn.ReLU(True),
             nn.Dropout(.2),
-            nn.Linear(128, n_cls)
+            nn.ReLU(True),
+            nn.Linear(128, n_out)
         )
-        self.num_vars = num_vars
 
     def forward(self, x, u):
         x = self.conv(x)

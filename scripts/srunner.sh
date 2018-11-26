@@ -6,7 +6,7 @@ source activate clinton
 # -w $3
 case $1 in
     cls)
-        srun --pty -p gpu -t 0 --mem-per-cpu 6000M --gres=gpu:4 python "$HOME/code/vision_final/scripts/train_classifier.py" $2;;
+        srun --pty -p gpu -t 0 --mem-per-cpu 6000M --gres=gpu:4 python "$HOME/code/vision_final/scripts/train_classifier.py" --dataset $2;;
     regr)
-        srun --pty -p gpu -t 0 --mem-per-cpu 6000M --gres=gpu:4 python "$HOME/code/vision_final/scripts/train_regressor.py" $2
+        srun --pty -p gpu -t 0 --mem-per-cpu 6000M --gres=gpu:4 python "$HOME/code/vision_final/scripts/train_regressor.py" --dataset $2 $3
 esac
