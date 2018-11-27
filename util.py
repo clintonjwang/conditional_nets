@@ -1,5 +1,8 @@
 import numpy as np
+import pandas as pd
 import scipy.stats as stats
+import os, glob
+from os.path import *
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
@@ -9,11 +12,59 @@ from matplotlib import cm
 import matplotlib.colors as colors
 import matplotlib as mpl
 import seaborn as sns
+import scripts.train_classifier as main
 
 from joblib import Parallel, delayed
 import multiprocessing
 num_cores = multiprocessing.cpu_count() - 2
 
+csv_path = '/data/vision/polina/users/clintonw/code/vision_final/results.csv'
+
+def get_ordered_experiments():
+    arg_list = []
+    datasets = ['mnist', 'fmnist', 'svhn', 'cifar10', 'cifar100']#, 'cifar100']
+    for ds in datasets:
+        arg_list.append(main.get_args(['--dataset', ds, '--img_only']))
+        
+    for ds in datasets:
+        arg_list.append(main.get_args(['--dataset', ds]))
+        
+    ds = 'fmnist'
+    arg_list.append(main.get_args(['--Y_fn', '%d*%dd%d' % (1, 0, 1), '--nU', '10']))
+    for u in range(2, 11, 2):
+        nU = round(1.5**u)
+        arg_list.append(main.get_args(['--Y_fn', '%d*%dd%d' % (1, 1, 1), '--nU', str(nU)]))
+        arg_list.append(main.get_args(['--Y_fn', '%d*%dd%d' % (0, 1, 1), '--nU', str(nU)]))
+        for mult in range(3, 12, 4):
+            arg_list.append(main.get_args(['--Y_fn', '%d*%dd%d' % (1, mult, 1), '--nU', str(nU)]))
+            arg_list.append(main.get_args(['--Y_fn', '%d*%dd%d' % (mult, 1, 1), '--nU', str(nU)]))
+        for div in range(3, nU+1, 3):
+            arg_list.append(main.get_args(['--Y_fn', '%d*%dd%d' % (1, 1, div), '--nU', str(nU)]))
+    
+    ix = 0
+    df = pd.read_csv(csv_path, index_col=0)
+    while ix < len(arg_list):
+        if arg_list[ix]['model_type'] in set(df['model_type']):
+            arg_list.pop(ix);
+        else:
+            ix += 1
+        
+    return arg_list
+
+def clean_df():
+    df = pd.read_csv(csv_path, index_col=0)
+    df = df[df['acc'] != -1]
+    
+    for fn in os.listdir('history'):
+        if fn[:fn.find('.')] not in df.index:
+            os.remove('history/'+fn)
+            
+    for Fn in glob.glob('data/*/*.npy'):
+        fn = basename(Fn)
+        if fn[:fn.rfind('_')] not in set(df['model_type']):
+            os.remove(Fn)
+            
+    df.to_csv(csv_path)
 
 def emp_post(xuy):
     """True image labels, context and outcome (N*3)
@@ -101,27 +152,33 @@ def js_div(post1, post2, pX, pU):
     return true_KL, emp_KL"""
     
     
-def get_entropy(f, context_type='uniform', nU=20, nX=10, noise=0):
+def get_entropy(args, nZ=10):
     """f is function of 2 vars, e.g. f = lambda x,u: (x+u)//3
     noise must be uniform and discrete over its range
     """
-    
-    nY = f(nU-1,nX-1)+1+noise
+    nX = nZ
+    nU = args['nU']
+    f = args['f']
+    noise = args['noise']
+    nY = f(nX-1,nU-1)+1+noise
     pX = np.ones(nX)/nX
 
-    if context_type == 'uniform':
+    if args['context_dist'] == 'uniform':
         pU_X = np.ones((nU,nX))/nU
 
-    elif context_type == 'binomial':
+    elif args['context_dist'] == 'binomial':
         pU_X = np.zeros((nU,nX))
         for x in range(nX):
-            pU_X[:,x] = stats.binom.pmf(range(nU), n=nU, p=(x+1)/(nU-9) )
+            pU_X[:,x] = stats.binom.pmf(range(nU), n=nU, p=(x+1)/(nX+1) )
+            
+        pU_X /= pU_X.sum(0)
 
     pXU = (pX * pU_X).transpose()
     pU = pXU.sum(0)
 
     pY = np.zeros(nY)
     pY_XU = np.zeros((nY,nX,nU))
+    pYXU = np.zeros((nY,nX,nU))
     for x in range(nX):
         for u in range(nU):
             for n in range(noise+1):
@@ -132,14 +189,17 @@ def get_entropy(f, context_type='uniform', nU=20, nX=10, noise=0):
     pY_X = (pY_XU*pU.reshape((1,1,-1))).sum(2)
     pY_U = (pY_XU*pX.reshape((1,-1,1))).sum(1)
 
-    pYX = pY_X * pX
-    pYU = pY_U * pU
+    pYX = pY_X * pX.reshape((1,-1))
+    pYU = pY_U * pU.reshape((1,-1))
 
+    HX = np.nansum(-pX*np.log(pX))
+    HU = np.nansum(-pU*np.log(pU))
     HY = np.nansum(-pY*np.log(pY))
     HY_X = np.nansum(-pYX*np.log(pY_X))
     HY_U = np.nansum(-pYU*np.log(pY_U))
-    HY_UX = 0
-
+    HY_XU = np.nansum(-pYXU*np.log(pY_XU))
     IXU = np.nansum(pXU*(np.log(pXU) - np.log(pX).reshape((-1,1)) - np.log(pU).reshape((1,-1)) ))
 
-    return HY_X, HY_U, HY, HY_UX, IXU
+    entropies = {'HZ': HX, 'HU': HU, 'HY': HY, 'HY_Z': HY_X, 'HY_U': HY_U, 'HY_ZU': HY_XU, 'IZU': IXU}
+
+    return entropies

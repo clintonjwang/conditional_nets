@@ -18,6 +18,7 @@ import niftiutils.nn.logger as logs
 import niftiutils.helper_fxns as hf
 import niftiutils.nn.submodules as subm
 import networks.base as nets
+import networks.dense as dense
 import datasets.common as datasets
 import datasets.mnist as mnist
 import datasets.cifar as cifar
@@ -25,17 +26,22 @@ import util
 
 csv_path = '/data/vision/polina/users/clintonw/code/vision_final/results.csv'
 log_path = '/data/vision/polina/users/clintonw/code/vision_final/logs'
-
+        
 def main(args):
     arg_cols = ['model_type', 'dataset', 'nU', 'context_dist', 'noise', 'optim', 'lr', 'wd']
     if exists(csv_path):
         df = pd.read_csv(csv_path, index_col=0)
         if len(set(arg_cols).difference(df.columns)) > 0:
-            df = pd.DataFrame(columns=arg_cols + ['acc', 'true_KL', 'emp_KL'])
+            df = pd.DataFrame(columns=arg_cols + ['acc', 'true_KL', 'emp_KL', 'true_JS', 'emp_JS'])
     else:
-        df = pd.DataFrame(columns=arg_cols + ['acc', 'true_KL', 'emp_KL'])
+        df = pd.DataFrame(columns=arg_cols + ['acc', 'true_KL', 'emp_KL', 'true_JS', 'emp_JS'])
 
-    args['model_name'] = args['model_type'] + '_%d' % sum(df['model_type'] == args['model_type'])
+    ix = 0
+    args['model_name'] = args['model_type'] + '_%d' % ix
+    while args['model_name'] in df.index:
+        ix += 1
+        args['model_name'] = args['model_type'] + '_%d' % ix
+    
     df.loc[args['model_name']] = [args[k] for k in arg_cols] + [-1,-1,-1]
     df.to_csv(csv_path)
 
@@ -66,36 +72,44 @@ def main(args):
     ds = dataset(train=False, args=args)
     val_loader = datasets.get_loader(ds, bsz=bsz)
     N_val = len(ds)
-
-    #train_loader, val_loader = dl.get_split_loaders(ds, batch_size)
-    n_out = args['f'](n_cls-1, args['nU']-1) + args['noise'] + 1
     
     if args['img_only']:
-        model = nets.BaseCNN(n_cls=n_cls, dims=dims).cuda()
+        if args['arch'] == 'all-conv':
+            model = nets.BaseCNN(n_cls=n_cls, dims=dims).cuda()
+        elif args['arch'] == 'dense':
+            model = dense.densenet_BC_cifar(depth=64, k=16, num_classes=n_cls).cuda()
+        elif args['arch'] == 'sota-dense':
+            model = dense.densenet_BC_cifar(depth=250, k=24, num_classes=n_cls).cuda()
     else:
+        n_out = args['f'](n_cls-1, args['nU']-1) + args['noise'] + 1
+        entropy = util.get_entropy(args=args, nZ=n_cls)
+        hf.pickle_dump(entropy, "../history/%s.ent" % args['model_type'])
         model = nets.FilmCNN(n_cls=n_cls, dims=dims, n_context=args['nU'], n_out=n_out).cuda()
+        
     par_model = nn.DataParallel(model)
     
     if args['tboard']:
         logger = logs.Logger(log_path)
 
-    if args['optim'] == 'nest':
-        optimizer = optim.SGD(model.parameters(), momentum=.9, nesterov=True, lr=args['lr'], weight_decay=args['wd'])
+    if args['optim'] == 'sgd':
+        optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=args['wd'])
+        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[75, 150, 200], gamma=0.1)
+        #scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[150, 225, 300], gamma=0.1)
+    elif args['optim'] == 'nest':
+        optimizer = optim.SGD(model.parameters(), momentum=.9, nesterov=True, lr=0.1, weight_decay=args['wd'])
+        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[75, 150, 200], gamma=0.1)
     elif args['optim'] == 'adam':
         optimizer = optim.Adam(model.parameters(), lr=args['lr'], weight_decay=args['wd'])
-    else:
-        optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[200, 250, 300], gamma=0.1)
-
-    criterion = nn.CrossEntropyLoss(ignore_index=-1).cuda()
-    max_epochs = 2000
+        
+    criterion = nn.CrossEntropyLoss(reduction='sum').cuda()
+    max_epochs = args['max_epochs']
     epoch = 1
-    patience = 20
+    patience = args['patience']
     loss_hist = [np.inf]*patience
     hist = {'loss': [], 'val-acc': []}
 
     while epoch <= max_epochs:
-        if args['optim'] == 'sched':
+        if args['optim'] == 'sgd':
             scheduler.step()
 
         running_loss = 0.0
@@ -113,7 +127,7 @@ def main(args):
                 else:
                     pred = par_model(imgs)
             else:
-                context = torch.zeros(labels.size(0), 10, dtype=torch.float).cuda()
+                context = torch.zeros(labels.size(0), args['nU'], dtype=torch.float).cuda()
                 context.scatter_(1, labels[:,1].view(-1,1), 1.)
                 target = labels[:,-1].long()
                 pred = par_model(imgs, context)
@@ -146,7 +160,7 @@ def main(args):
                     pred = par_model(imgs)
             else:
                 target = labels[:,-1].long()
-                context = torch.zeros(labels.size(0), 10, dtype=torch.float).cuda()
+                context = torch.zeros(labels.size(0), args['nU'], dtype=torch.float).cuda()
                 context.scatter_(1, labels[:,1].view(-1,1), 1.)
                 pred = par_model(imgs, context)
             
@@ -179,7 +193,7 @@ def main(args):
             info = { 'loss': running_loss, 'accuracy': acc }
             logs.log_tboard(logger, info, model, sample_train_imgs, epoch)
 
-    hf.pickle_dump(hist, "../history/%s.history" % args['model_name'])
+    hf.pickle_dump(hist, "../history/%s.hist" % args['model_name'])
     if not args['img_only']:
         xuy = ds.synth_vars
         emp_post = util.emp_post(xuy)
@@ -187,6 +201,8 @@ def main(args):
         pred_post, pX, pU = util.pred_post(preds, xuy[:,:2])
         true_KL = util.kl_div(pred_post, true_post, pX, pU)
         emp_KL = util.kl_div(pred_post, emp_post, pX, pU)
+        true_JS = util.js_div(pred_post, true_post, pX, pU)
+        emp_JS = util.js_div(pred_post, emp_post, pX, pU)
     else:
         true_KL, emp_KL = -1,-1
         
@@ -201,37 +217,41 @@ def get_args(args=None):
     parser.add_argument('--nU', type=int, default=10, help='Number of possible categories for the context variable.')
     parser.add_argument('--context_dist', type=str, default='uniform', choices=['uniform', 'binomial'], help='Distribution of the context variable.')
     parser.add_argument('--noise', type=int, default=0, help='Noise in the outcome variable.')
-    parser.add_argument('--outcome_fn', type=str, default='+', choices=['+', '+3', '+5', '+10'], help='Outcome as a function of h and u.')
-    parser.add_argument('--optim', type=str, default='adam', choices=['nest', 'adam'], help='Optimizer.')
+    parser.add_argument('--Y_fn', type=str, default='1+1d1', help='Outcome as a function of z and u. "A+BdC" for (z*A+u*B)//C')
+    
+    parser.add_argument('--arch', type=str, default='all-conv', choices=['all-conv', 'dense', 'sota-dense'], help='CNN architecture.')
+    parser.add_argument('--optim', type=str, default='adam', choices=['sgd', 'nest', 'adam'], help='Optimizer.')
+    parser.add_argument('--patience', type=int, default=20, help='Loss patience.')
+    parser.add_argument('--max_epochs', type=int, default=250, help='Loss patience.')
 
     parser.add_argument('--mcmc', action="store_true")
     parser.add_argument('--tboard', action="store_true")
     parser.add_argument('--refresh_data', action="store_true")
     parser.add_argument('--img_only', action="store_true")
 
-    parser.add_argument('--bsz', type=int, default=1024, help='batch size per GPU')
+    parser.add_argument('--bsz', type=int, default=256, help='batch size per GPU') #1024
     parser.add_argument('--lr', type=float, default=0.001, help='learning rate')
-    parser.add_argument('--wd', type=float, default=0.001, help='weight decay')
+    parser.add_argument('--wd', type=float, default=1e-4, help='weight decay')
 
     if args is not None:
         args = vars(parser.parse_args(args))
     else:
         args = vars(parser.parse_args())
 
+    if args['arch'] == 'sota-dense':
+        args['bsz'] = 16
+        
     if args['img_only']:
         args['model_type'] = args['dataset']
     else:
-        args['model_type'] = '%s_u%d%s_y%s_n%d' % (args['dataset'], args['nU'], args['context_dist'], args['outcome_fn'], args['noise'])
+        args['model_type'] = '%s_u%d%s_y%s_n%d' % (args['dataset'], args['nU'], args['context_dist'], args['Y_fn'], args['noise'])
         
-    if args['outcome_fn'] == '+':
-        f = lambda h,u: h+u
-    elif args['outcome_fn'] == '+3':
-        f = lambda h,u: (h+u)//3
-    elif args['outcome_fn'] == '+5':
-        f = lambda h,u: (h+u)//5
-    elif args['outcome_fn'] == '+10':
-        f = lambda h,u: (h+u)//10
-    args['f'] = f
+    i = args['Y_fn'].find('+')
+    j = args['Y_fn'].find('d')
+    A = int(args['Y_fn'][:i])
+    B = int(args['Y_fn'][i+1:j])
+    C = int(args['Y_fn'][j+1:])
+    args['f'] = lambda z,u: (z*A+u*B)//C
 
     return args
 

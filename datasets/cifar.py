@@ -14,13 +14,11 @@ import datasets.common
 root_dir = '/data/vision/polina/users/clintonw/code/vision_final'
 
 class Cifar10(torch_data.CIFAR10):
-    #Tx = Compose([
     train_mean = [0.49139968,  0.48215841,  0.44653091]
     train_std = [0.24703223,  0.24348513,  0.26158784]
     transform_train = Compose([
         ToPILImage(),
-        ColorJitter(brightness=0.1, contrast=0.2, saturation=0.02, hue=0.02),
-        RandomResizedCrop(32, scale=(0.8, 1.0), ratio=(0.75, 1.33)), #RandomCrop(32, padding=4),
+        transforms.RandomCrop(32, padding=4),#ColorJitter(brightness=0.1, contrast=0.2, saturation=0.02, hue=0.02), RandomResizedCrop(32, scale=(0.8, 1.0), ratio=(0.75, 1.33)),
         RandomHorizontalFlip(),
         ToTensor(),
         Normalize(train_mean, train_std),
@@ -36,11 +34,11 @@ class Cifar10(torch_data.CIFAR10):
         if train:
             self.imgs = self.train_data
             self.labels = torch.tensor(self.train_labels, dtype=torch.long)
-            fn = join(self.root, '%s_train.npy' % args['model_name'])
+            fn = join(self.root, '%s_train.npy' % args['model_type'])
         else:
             self.imgs = self.test_data
             self.labels = torch.tensor(self.test_labels, dtype=torch.long)
-            fn = join(self.root, '%s_val.npy' % args['model_name'])
+            fn = join(self.root, '%s_val.npy' % args['model_type'])
 
         if args['refresh_data'] or not exists(fn):
             self.get_cls_data(f=args['f'], noise=args['noise'], mode=args['context_dist'], fn=fn)
@@ -64,6 +62,8 @@ class Cifar10(torch_data.CIFAR10):
         
 
 class Cifar100(Cifar10):
+    train_mean = [0.507, 0.487, 0.441]
+    train_std = [0.267, 0.256, 0.276]
     base_folder = 'cifar-100-python'
     url = "https://www.cs.toronto.edu/~kriz/cifar-100-python.tar.gz"
     filename = "cifar-100-python.tar.gz"

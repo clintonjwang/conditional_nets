@@ -30,25 +30,27 @@ def get_split_loaders(ds, batch_size, random_seed=42):
     return train_loader, val_loader
 
 
-def get_cls_data(ds, f, noise, mode, fn):
-    h = ds.labels.numpy()
+def get_cls_data(ds, args, fn):
+    z = ds.labels.numpy()
+    nU = args['nU']
+    
     # generate the contextual variable u
-    if mode == 'correlated':
-        u = np.random.binomial(9,(h+1)/11)
-    elif mode == 'high-dim':
-        u = np.random.randint(0,10,(h.shape[0],64))
+    if args['context_dist'] == 'binomial':
+        u = np.random.binomial(nU, (z+1)/(args['nZ']+1))
+    elif args['context_dist'] == 'high-dim':
+        u = np.random.randint(0,nU, (z.shape[0],64))
     else:
-        u = np.random.randint(0,10,h.shape)
+        u = np.random.randint(0,nU, z.shape)
 
     # generate the outcome y
-    if mode == 'high-dim':
-        y = np.round(u.sum(1)/64) + h
+    if args['context_dist'] == 'high-dim':
+        y = np.round(u.sum(1)/64) + z
     else:
-        y = f(h,u) + np.random.randint(low=0,high=noise+1, size=h.shape)
+        y = args['f'](z,u) + np.random.randint(low=0, high=args['noise']+1, size=z.shape)
 
-    if mode == 'high-dim':
-        synth_vars = np.concat([h.expand_dims(1), u, y.expand_dims(1)], 1)
+    if args['context_dist'] == 'high-dim':
+        zuy = np.concat([z.expand_dims(1), u, y.expand_dims(1)], 1)
     else:
-        synth_vars = np.stack([h, u, y], 1)
+        zuy = np.stack([z, u, y], 1)
 
-    np.save(fn, synth_vars)
+    np.save(fn, zuy)

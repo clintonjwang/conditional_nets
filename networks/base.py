@@ -40,10 +40,10 @@ class BaseCNN(nn.Module):
 
 
 class FilmCNN(BaseCNN):
-    def __init__(self, n_cls=10, dims=(1,28,28), n_context=10, n_out=19):
-        super(FilmCNN, self).__init__(dims=dims, n_cls=n_cls)
+    def __init__(self, dims=(1,28,28), nZ=10, nU=10, nY=19):
+        super(FilmCNN, self).__init__(dims=dims, n_cls=nZ)
         self.pre_film = nn.Sequential(
-            nn.Linear(n_context, 64),
+            nn.Linear(nU, 64),
             nn.Dropout(.2),
             nn.ReLU(True)
         )
@@ -52,7 +52,7 @@ class FilmCNN(BaseCNN):
             nn.Linear(192+64, 128),
             nn.Dropout(.2),
             nn.ReLU(True),
-            nn.Linear(128, n_out)
+            nn.Linear(128, nY)
         )
 
     def forward(self, x, u):

@@ -19,14 +19,14 @@ class MnistDS(torch_data.MNIST):
         if train:
             self.imgs = self.train_data
             self.labels = self.train_labels
-            fn = join(self.root, '%s_train.npy' % args['model_name'])
+            fn = join(self.root, '%s_train.npy' % args['model_type'])
         else:
             self.imgs = self.test_data
             self.labels = self.test_labels
-            fn = join(self.root, '%s_val.npy' % args['model_name'])
+            fn = join(self.root, '%s_val.npy' % args['model_type'])
         
         if args['refresh_data'] or not exists(fn):
-            self.get_cls_data(f=args['f'], noise=args['noise'], mode=args['context_dist'], fn=fn)
+            datasets.common.get_cls_data(self, fn=fn, args=args)
             
         self.imgs = self.imgs.view(-1,1,28,28).float() / 255.
         
@@ -37,9 +37,6 @@ class MnistDS(torch_data.MNIST):
         img, synth_vars = self.imgs[index], self.synth_vars[index]
         
         return img, synth_vars
-
-    def get_cls_data(self, **kwargs):
-        datasets.common.get_cls_data(self, **kwargs)
     
         
 class FMnistDS(MnistDS):
