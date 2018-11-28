@@ -18,7 +18,7 @@ class Cifar10(torch_data.CIFAR10):
     train_std = [0.24703223,  0.24348513,  0.26158784]
     transform_train = Compose([
         ToPILImage(),
-        transforms.RandomCrop(32, padding=4),#ColorJitter(brightness=0.1, contrast=0.2, saturation=0.02, hue=0.02), RandomResizedCrop(32, scale=(0.8, 1.0), ratio=(0.75, 1.33)),
+        RandomCrop(32, padding=4),#ColorJitter(brightness=0.1, contrast=0.2, saturation=0.02, hue=0.02), RandomResizedCrop(32, scale=(0.8, 1.0), ratio=(0.75, 1.33)),
         RandomHorizontalFlip(),
         ToTensor(),
         Normalize(train_mean, train_std),
@@ -42,8 +42,6 @@ class Cifar10(torch_data.CIFAR10):
 
         if args['refresh_data'] or not exists(fn):
             self.get_cls_data(f=args['f'], noise=args['noise'], mode=args['context_dist'], fn=fn)
-        
-        #self.imgs = self.imgs.transpose((0,3,1,2)) #torch.tensor(self.imgs, dtype=torch.float).permute(0,3,1,2) / 255.
         
         self.synth_vars = torch.from_numpy(np.load(fn))
         self.train = train

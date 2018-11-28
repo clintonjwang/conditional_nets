@@ -1,3 +1,4 @@
+# https://github.com/junyuseu/pytorch-cifar-models
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -82,7 +83,7 @@ class DenseNet_Cifar(nn.Module):
 
         # Linear layer
         self.classifier = nn.Linear(num_features, num_classes)
-        
+        self.num_features = num_features
         # initialize conv and bn parameters
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -100,7 +101,60 @@ class DenseNet_Cifar(nn.Module):
         return out
 
 
+class FilmDenseNet(DenseNet_Cifar):
+    r"""Densenet-BC model class, based on
+    `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_
+    Args:
+        growth_rate (int) - how many filters to add each layer (`k` in paper)
+        block_config (list of 4 ints) - how many layers in each pooling block
+        num_init_features (int) - the number of filters to learn in the first convolution layer
+        bn_size (int) - multiplicative factor for number of bottle neck layers
+          (i.e. bn_size * k features in the bottleneck layer)
+        drop_rate (float) - dropout rate after each dense layer
+        num_classes (int) - number of classification classes
+    """
+    def __init__(self, nZ=10, nU=10, nY=19, **kwargs):
+        super(FilmDenseNet, self).__init__(num_classes=nZ, **kwargs)
+
+        # Linear layer
+        self.pre_film = nn.Sequential(
+            nn.Linear(nU, 64),
+            nn.Dropout(.2),
+            nn.ReLU(True)
+        )
+        self.film = nn.Sequential(
+            nn.Linear(self.num_features+64, 128),
+            nn.Dropout(.2),
+            nn.ReLU(True),
+            nn.Linear(128, nY)
+        )
+        
+        # initialize conv and bn parameters
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2. / n))
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+
+    def forward(self, x):
+        features = self.features(x)
+        z = F.relu(features, inplace=True)
+        z = F.avg_pool2d(z, kernel_size=8, stride=1).view(z.size(0), -1)
+
+        u = self.pre_film(u)
+        uz = torch.cat([u, z], 1)
+        y = self.film(uz)
+        return y
+
+
 def densenet_BC_cifar(depth, k, **kwargs):
+    N = (depth - 4) // 6
+    model = DenseNet_Cifar(growth_rate=k, block_config=[N, N, N], num_init_features=2*k, **kwargs)
+    return model
+
+def film_densenet(depth, k, **kwargs):
     N = (depth - 4) // 6
     model = DenseNet_Cifar(growth_rate=k, block_config=[N, N, N], num_init_features=2*k, **kwargs)
     return model

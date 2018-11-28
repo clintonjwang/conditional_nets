@@ -3,6 +3,7 @@ import pandas as pd
 import scipy.stats as stats
 import os, glob
 from os.path import *
+import scipy.ndimage.filters as filters
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
@@ -20,31 +21,74 @@ num_cores = multiprocessing.cpu_count() - 2
 
 csv_path = '/data/vision/polina/users/clintonw/code/vision_final/results.csv'
 
+
+def heatmap(data, title, save_path, sigma=15):
+    data = filters.gaussian_filter(data, sigma=sigma)
+
+    colors = [(0, 0, 1), (0, 1, 1), (0, 1, 0.75), (0, 1, 0), (0.75, 1, 0),
+              (1, 1, 0), (1, 0.8, 0), (1, 0.7, 0), (1, 0, 0)]
+
+    cm = LinearSegmentedColormap.from_list('sample', colors)
+
+    plt.imshow(data, cmap='jet') #cm
+    plt.colorbar()
+    plt.title(title)
+    #plt.savefig(save_path)
+    #plt.close()
+
+    ##plt.imshow(ents, cmap='hot', interpolation='nearest')
+
+def args_to_sh(args, slurm=True, exc_gpu=False, n_gpus=4):
+    ix = 0
+    while exists("/data/vision/polina/users/clintonw/code/vision_final/scripts/cls%d.out" % ix):
+        ix += 1
+
+    if slurm:
+        return 'nohup ./srunner.sh cls %d ' % n_gpus + ' '.join(args) + ' > cls%d.out 2> cls%d.err < /dev/null &' % (ix,ix)
+
+    if exc_gpu == 1:
+        extra = 'CUDA_VISIBLE_DEVICES=1,2,3 '
+    elif exc_gpu == 2:
+        extra = 'CUDA_VISIBLE_DEVICES=4,5,6,7 '
+    else:
+        extra = ''
+    return extra + 'nohup python train_classifier.py ' + ' '.join(args) + ' > cls%d.out 2> cls%d.err < /dev/null &' % (ix,ix)
+
 def get_ordered_experiments():
     arg_list = []
-    datasets = ['mnist', 'fmnist', 'svhn', 'cifar10', 'cifar100']#, 'cifar100']
+    datasets = ['mnist', 'fmnist', 'cifar10', 'cifar100']#, 'svhn', 'cifar100']
     for ds in datasets:
-        arg_list.append(main.get_args(['--dataset', ds, '--img_only']))
+        if 'cifar' in ds:
+            arg_list.append(['--dataset', ds, '--img_only', '--arch', 'dense', '--bsz', '256'])
+        else:
+            arg_list.append(['--dataset', ds, '--img_only'])
         
     for ds in datasets:
-        arg_list.append(main.get_args(['--dataset', ds]))
+        arg_list.append(['--dataset', ds])
         
     ds = 'fmnist'
-    arg_list.append(main.get_args(['--Y_fn', '%d*%dd%d' % (1, 0, 1), '--nU', '10']))
     for u in range(2, 11, 2):
         nU = round(1.5**u)
-        arg_list.append(main.get_args(['--Y_fn', '%d*%dd%d' % (1, 1, 1), '--nU', str(nU)]))
-        arg_list.append(main.get_args(['--Y_fn', '%d*%dd%d' % (0, 1, 1), '--nU', str(nU)]))
+        arg_list.append(['--dataset', ds, '--Y_fn', '%d+%dd%d' % (1, 1, 1), '--nU', str(nU)])
+        
+    arg_list.append(['--dataset', ds, '--Y_fn', '%d+%dd%d' % (1, 0, 1), '--nU', '256'])
+    
+    arg_list.append(['--dataset', ds, '--Y_fn', '%d+%dd%d' % (0, 1, 16), '--nU', '1024'])
+    
+    arg_list.append(['--dataset', ds, '--Y_fn', '%d+%dd%d' % (0, 1, 16), '--nU', '1024', '--noise', '2'])
+    
+    for u in range(2, 11, 2):
+        nU = round(1.5**u)
         for mult in range(3, 12, 4):
-            arg_list.append(main.get_args(['--Y_fn', '%d*%dd%d' % (1, mult, 1), '--nU', str(nU)]))
-            arg_list.append(main.get_args(['--Y_fn', '%d*%dd%d' % (mult, 1, 1), '--nU', str(nU)]))
+            arg_list.append(['--dataset', ds, '--Y_fn', '%d+%dd%d' % (1, mult, 1), '--nU', str(nU)])
+            arg_list.append(['--dataset', ds, '--Y_fn', '%d+%dd%d' % (mult, 1, 1), '--nU', str(nU)])
         for div in range(3, nU+1, 3):
-            arg_list.append(main.get_args(['--Y_fn', '%d*%dd%d' % (1, 1, div), '--nU', str(nU)]))
+            arg_list.append(['--dataset', ds, '--Y_fn', '%d+%dd%d' % (1, 1, div), '--nU', str(nU)])
     
     ix = 0
     df = pd.read_csv(csv_path, index_col=0)
     while ix < len(arg_list):
-        if arg_list[ix]['model_type'] in set(df['model_type']):
+        if main.get_args(arg_list[ix])['model_type'] in set(df['model_type']):
             arg_list.pop(ix);
         else:
             ix += 1
@@ -98,7 +142,7 @@ def true_post(xu, f, noise=0):
     Returns true posterior (nX*nU*n_cls)"""
     nX = xu[:,0].max()+1
     nU = xu[:,1].max()+1
-    nY = f(nU-1,nX-1)+1+noise
+    nY = f(nX-1,nU-1)+1+noise
     pY_XU = np.zeros((nY,nX,nU))
     for x in range(nX):
         for u in range(nU):
@@ -184,7 +228,7 @@ def get_entropy(args, nZ=10):
             for n in range(noise+1):
                 pY[f(x,u)+n] += pXU[x,u]
                 pY_XU[f(x,u)+n,x,u] = 1/(noise+1)
-                pYXU[f(x,u)+n,x,u] = pX[x] * pU[u] * pY_XU[f(x,u)+n,x,u]
+                pYXU[f(x,u)+n,x,u] = np.expand_dims(pXU[x,u], 0) * pY_XU[f(x,u)+n,x,u]
 
     pY_X = (pY_XU*pU.reshape((1,1,-1))).sum(2)
     pY_U = (pY_XU*pX.reshape((1,-1,1))).sum(1)

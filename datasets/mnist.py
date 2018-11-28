@@ -27,7 +27,8 @@ class MnistDS(torch_data.MNIST):
         
         if args['refresh_data'] or not exists(fn):
             datasets.common.get_cls_data(self, fn=fn, args=args)
-            
+        
+        #self.imgs = self.imgs.view(-1,1,28,28).numpy()
         self.imgs = self.imgs.view(-1,1,28,28).float() / 255.
         
         self.synth_vars = torch.from_numpy(np.load(fn))

@@ -28,13 +28,17 @@ csv_path = '/data/vision/polina/users/clintonw/code/vision_final/results.csv'
 log_path = '/data/vision/polina/users/clintonw/code/vision_final/logs'
         
 def main(args):
-    arg_cols = ['model_type', 'dataset', 'nU', 'context_dist', 'noise', 'optim', 'lr', 'wd']
+    import warnings
+    warnings.filterwarnings("ignore")
+
+    arg_cols = ['model_type', 'dataset', 'nU', 'context_dist', 'noise', 'optim', 'arch', 'lr', 'wd']
+    other_cols = ['acc', 'true_KL', 'emp_KL', 'true_JS', 'emp_JS', 'epochs']
     if exists(csv_path):
         df = pd.read_csv(csv_path, index_col=0)
         if len(set(arg_cols).difference(df.columns)) > 0:
-            df = pd.DataFrame(columns=arg_cols + ['acc', 'true_KL', 'emp_KL', 'true_JS', 'emp_JS'])
+            df = pd.DataFrame(columns=arg_cols + other_cols)
     else:
-        df = pd.DataFrame(columns=arg_cols + ['acc', 'true_KL', 'emp_KL', 'true_JS', 'emp_JS'])
+        df = pd.DataFrame(columns=arg_cols + other_cols)
 
     ix = 0
     args['model_name'] = args['model_type'] + '_%d' % ix
@@ -42,7 +46,7 @@ def main(args):
         ix += 1
         args['model_name'] = args['model_type'] + '_%d' % ix
     
-    df.loc[args['model_name']] = [args[k] for k in arg_cols] + [-1,-1,-1]
+    df.loc[args['model_name']] = [args[k] for k in arg_cols] + [-1]*len(other_cols)
     df.to_csv(csv_path)
 
     n_gpus = torch.cuda.device_count()
@@ -82,9 +86,7 @@ def main(args):
             model = dense.densenet_BC_cifar(depth=250, k=24, num_classes=n_cls).cuda()
     else:
         n_out = args['f'](n_cls-1, args['nU']-1) + args['noise'] + 1
-        entropy = util.get_entropy(args=args, nZ=n_cls)
-        hf.pickle_dump(entropy, "../history/%s.ent" % args['model_type'])
-        model = nets.FilmCNN(n_cls=n_cls, dims=dims, n_context=args['nU'], n_out=n_out).cuda()
+        model = nets.FilmCNN(nZ=n_cls, dims=dims, nU=args['nU'], nY=n_out).cuda()
         
     par_model = nn.DataParallel(model)
     
@@ -101,8 +103,8 @@ def main(args):
     elif args['optim'] == 'adam':
         optimizer = optim.Adam(model.parameters(), lr=args['lr'], weight_decay=args['wd'])
         
-    criterion = nn.CrossEntropyLoss(reduction='sum').cuda()
-    max_epochs = args['max_epochs']
+    criterion = nn.CrossEntropyLoss().cuda()
+    max_epochs = args['epochs']
     epoch = 1
     patience = args['patience']
     loss_hist = [np.inf]*patience
@@ -135,8 +137,9 @@ def main(args):
             loss = criterion(pred, target)
             loss.backward()
             optimizer.step()
-            running_loss += loss.item()
-
+            running_loss += loss.item() * imgs.size(0)
+        running_loss /= N_train
+        
         if running_loss < np.min(loss_hist):
             torch.save(model.state_dict(), "../history/%s.state" % args['model_name'])
             
@@ -145,7 +148,10 @@ def main(args):
         par_model.eval();
 
         print("Loss: %.2f / " % (running_loss), end='')
-        sample_train_imgs = imgs[:5].cpu().numpy()
+        if imgs.size(1) == 1:
+            sample_train_imgs = imgs[:5,0].cpu().numpy()
+        else:
+            sample_train_imgs = imgs[:5].cpu().numpy()
         
         acc = 0.
         preds = []
@@ -193,20 +199,28 @@ def main(args):
             info = { 'loss': running_loss, 'accuracy': acc }
             logs.log_tboard(logger, info, model, sample_train_imgs, epoch)
 
-    hf.pickle_dump(hist, "../history/%s.hist" % args['model_name'])
+    hist['epochs'] = epoch-1
+    
     if not args['img_only']:
+        entropy = util.get_entropy(args=args, nZ=n_cls)
+        
         xuy = ds.synth_vars
         emp_post = util.emp_post(xuy)
         true_post = util.true_post(xuy[:,:2], args['f'], noise=args['noise'])
         pred_post, pX, pU = util.pred_post(preds, xuy[:,:2])
-        true_KL = util.kl_div(pred_post, true_post, pX, pU)
-        emp_KL = util.kl_div(pred_post, emp_post, pX, pU)
-        true_JS = util.js_div(pred_post, true_post, pX, pU)
-        emp_JS = util.js_div(pred_post, emp_post, pX, pU)
-    else:
-        true_KL, emp_KL = -1,-1
+        hist['true_KL'] = util.kl_div(pred_post, true_post, pX, pU)
+        hist['emp_KL'] = util.kl_div(pred_post, emp_post, pX, pU)
+        hist['true_JS'] = util.js_div(pred_post, true_post, pX, pU)
+        hist['emp_JS'] = util.js_div(pred_post, emp_post, pX, pU)
         
-    df.loc[args['model_name']] = [args[k] for k in arg_cols] + [acc, true_KL, emp_KL]
+        hist = {**hist, **entropy, **args}
+        hist.pop('f');
+        
+    hf.pickle_dump(hist, "../history/%s.hist" % args['model_name'])
+        
+    df = pd.read_csv(csv_path, index_col=0)
+    df.loc[args['model_name']] = [args[k] for k in arg_cols] + [acc] + [
+            hist[k] if k in hist else -1 for k in ['true_KL', 'emp_KL', 'true_JS', 'emp_JS', 'epochs']]
     df.to_csv(csv_path)
         
 
@@ -221,15 +235,15 @@ def get_args(args=None):
     
     parser.add_argument('--arch', type=str, default='all-conv', choices=['all-conv', 'dense', 'sota-dense'], help='CNN architecture.')
     parser.add_argument('--optim', type=str, default='adam', choices=['sgd', 'nest', 'adam'], help='Optimizer.')
-    parser.add_argument('--patience', type=int, default=20, help='Loss patience.')
-    parser.add_argument('--max_epochs', type=int, default=250, help='Loss patience.')
+    parser.add_argument('--patience', type=int, default=15, help='Loss patience.')
+    parser.add_argument('--epochs', type=int, default=750, help='Loss patience.')
 
     parser.add_argument('--mcmc', action="store_true")
     parser.add_argument('--tboard', action="store_true")
     parser.add_argument('--refresh_data', action="store_true")
     parser.add_argument('--img_only', action="store_true")
 
-    parser.add_argument('--bsz', type=int, default=256, help='batch size per GPU') #1024
+    parser.add_argument('--bsz', type=int, default=2048, help='batch size per GPU')
     parser.add_argument('--lr', type=float, default=0.001, help='learning rate')
     parser.add_argument('--wd', type=float, default=1e-4, help='weight decay')
 
@@ -240,9 +254,12 @@ def get_args(args=None):
 
     if args['arch'] == 'sota-dense':
         args['bsz'] = 16
+    elif args['arch'] == 'dense':
+        args['bsz'] = 256
         
     if args['img_only']:
         args['model_type'] = args['dataset']
+        args['nU'] = 0
     else:
         args['model_type'] = '%s_u%d%s_y%s_n%d' % (args['dataset'], args['nU'], args['context_dist'], args['Y_fn'], args['noise'])
         

@@ -1,9 +1,11 @@
-data
-datasets
-history
-logs
+data/
+datasets/
+history/
+logs/
 *.npy
 *.csv
+*.out
+*.err
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

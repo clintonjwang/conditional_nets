@@ -32,6 +32,9 @@ def get_split_loaders(ds, batch_size, random_seed=42):
 
 def get_cls_data(ds, args, fn):
     z = ds.labels.numpy()
+    if args['img_only']:
+        np.save(fn, np.expand_dims(z, 1))
+        return
     nU = args['nU']
     
     # generate the contextual variable u

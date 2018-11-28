@@ -1,42 +1,42 @@
 import torch
 import torch.nn.functional as F
 import niftiutils.nn.submodules as subm
+import math
 nn = torch.nn
 
 class BaseCNN(nn.Module):
     def __init__(self, dims=(1,28,28), n_cls=10):
         super(BaseCNN, self).__init__()
         self.dims = dims
+        self.n_h = 64
         self.conv = nn.Sequential(
+            nn.Conv2d(dims[0], 64, kernel_size=5),
+            nn.MaxPool2d(2),
+            nn.ReLU(True),
+            nn.Conv2d(64, self.n_h, kernel_size=5),
             nn.Dropout2d(.2),
-            nn.Conv2d(dims[0], 96, kernel_size=3),
-            nn.ReLU(True),
-            nn.Conv2d(96, 96, kernel_size=3),
-            nn.ReLU(True),
-            nn.Conv2d(96, 96, kernel_size=3, stride=2),
-            nn.Dropout2d(.5),
-            nn.ReLU(True),
-            nn.Conv2d(96, 192, kernel_size=3),
-            nn.ReLU(True),
-            nn.Conv2d(192, 192, kernel_size=3),
-            nn.ReLU(True),
-            nn.Conv2d(192, 192, kernel_size=3, stride=2),
-            nn.Dropout2d(.5),
-            nn.ReLU(True),
-            nn.Conv2d(192, 192, kernel_size=3),
-            nn.ReLU(True),
-            nn.Conv2d(192, 192, kernel_size=1),
+            nn.MaxPool2d(2),
             nn.ReLU(True)
         )
-        self.cls = nn.Sequential(
-            nn.Conv2d(192, n_cls, kernel_size=1),
+        self.pool = nn.Sequential(
             nn.AdaptiveAvgPool2d(1)
         )
+        self.cls = nn.Linear(self.n_h, n_cls)
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2. / n))
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+
 
     def forward(self, x):
         x = self.conv(x)
-        x = self.cls(x).view(x.size(0), -1)
-        return x
+        x = self.pool(x).view(x.size(0), -1)
+        z = self.cls(x)
+        return z
 
 
 class FilmCNN(BaseCNN):
@@ -49,7 +49,7 @@ class FilmCNN(BaseCNN):
         )
         self.global_pool = nn.AdaptiveAvgPool2d(1)
         self.film = nn.Sequential(
-            nn.Linear(192+64, 128),
+            nn.Linear(self.n_h+64, 128),
             nn.Dropout(.2),
             nn.ReLU(True),
             nn.Linear(128, nY)
@@ -61,5 +61,5 @@ class FilmCNN(BaseCNN):
         u = self.pre_film(u)
         
         ux = torch.cat([u, x], 1)
-        ux = self.film(ux)
-        return ux
+        y = self.film(ux)
+        return y
