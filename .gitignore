@@ -2,10 +2,13 @@ data/
 datasets/
 history/
 logs/
+results/
 *.npy
 *.csv
 *.out
 *.err
+*.jpg
+*.png
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

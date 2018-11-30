@@ -32,8 +32,8 @@ class Cifar10(torch_data.CIFAR10):
     def __init__(self, train, args, root=root_dir + '/data/cifar10', **kwargs):
         super(Cifar10, self).__init__(root=root, train=train, **kwargs)
         if train:
-            self.imgs = self.train_data
-            self.labels = torch.tensor(self.train_labels, dtype=torch.long)
+            self.imgs = self.train_data[:args['N_train']]
+            self.labels = torch.tensor(self.train_labels[:args['N_train']], dtype=torch.long)
             fn = join(self.root, '%s_train.npy' % args['model_type'])
         else:
             self.imgs = self.test_data
@@ -41,7 +41,7 @@ class Cifar10(torch_data.CIFAR10):
             fn = join(self.root, '%s_val.npy' % args['model_type'])
 
         if args['refresh_data'] or not exists(fn):
-            self.get_cls_data(f=args['f'], noise=args['noise'], mode=args['context_dist'], fn=fn)
+            datasets.common.get_cls_data(self, fn=fn, args=args)
         
         self.synth_vars = torch.from_numpy(np.load(fn))
         self.train = train
@@ -54,9 +54,6 @@ class Cifar10(torch_data.CIFAR10):
             img = self.transform_test(img)
         
         return img, synth_vars
-
-    def get_cls_data(self, **kwargs):
-        datasets.common.get_cls_data(self, **kwargs)
         
 
 class Cifar100(Cifar10):

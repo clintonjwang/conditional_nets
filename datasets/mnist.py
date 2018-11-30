@@ -17,8 +17,8 @@ class MnistDS(torch_data.MNIST):
     def __init__(self, train, args, root=root_dir + '/data/mnist', **kwargs):
         super(MnistDS, self).__init__(root=root, train=train, **kwargs)
         if train:
-            self.imgs = self.train_data
-            self.labels = self.train_labels
+            self.imgs = self.train_data[:args['N_train']]
+            self.labels = self.train_labels[:args['N_train']]
             fn = join(self.root, '%s_train.npy' % args['model_type'])
         else:
             self.imgs = self.test_data

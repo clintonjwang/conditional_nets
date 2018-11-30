@@ -15,7 +15,7 @@ torch.backends.cudnn.benchmark=True
 
 sys.path.append('..')
 import niftiutils.nn.logger as logs
-import niftiutils.helper_fxns as hf
+import niftiutils.io as io
 import niftiutils.nn.submodules as subm
 import networks.base as nets
 import networks.dense as dense
@@ -23,6 +23,7 @@ import datasets.common as datasets
 import datasets.mnist as mnist
 import datasets.cifar as cifar
 import util
+import analysis as ana
 
 csv_path = '/data/vision/polina/users/clintonw/code/vision_final/results.csv'
 log_path = '/data/vision/polina/users/clintonw/code/vision_final/logs'
@@ -31,12 +32,12 @@ def main(args):
     import warnings
     warnings.filterwarnings("ignore")
 
-    arg_cols = ['model_type', 'dataset', 'nU', 'context_dist', 'noise', 'optim', 'arch', 'lr', 'wd']
+    arg_cols = ['model_type', 'N_train', 'dataset', 'nZ', 'nU', 'context_dist', 'Y_fn', 'noise', 'optim', 'arch', 'lr', 'wd']
     other_cols = ['acc', 'true_KL', 'emp_KL', 'true_JS', 'emp_JS', 'epochs']
     if exists(csv_path):
         df = pd.read_csv(csv_path, index_col=0)
-        if len(set(arg_cols).difference(df.columns)) > 0:
-            df = pd.DataFrame(columns=arg_cols + other_cols)
+        if sorted(arg_cols + other_cols) != sorted(list(df.columns)) and len(df) > 0:
+            raise ValueError('Fix columns in results.csv or delete it.')
     else:
         df = pd.DataFrame(columns=arg_cols + other_cols)
 
@@ -53,7 +54,6 @@ def main(args):
     bsz = args['bsz'] * n_gpus
     n_samples = 100
 
-    n_cls = 10
     dims = (1,28,28)
     if 'fmnist' == args['dataset']:
         dataset = mnist.FMnistDS
@@ -65,28 +65,28 @@ def main(args):
         dataset = cifar.Cifar10
         dims = (3,32,32)
     elif 'cifar100' == args['dataset']:
-        n_cls = 100
         dataset = cifar.Cifar100
         dims = (3,32,32)
         
     ds = dataset(train=True, args=args)
     train_loader = datasets.get_loader(ds, bsz=bsz)
-    N_train = len(ds)
+    assert args['N_train'] == len(ds), "Training set only has %d elements, N_train was specified as %d" % (len(ds), args['N_train'])
     
     ds = dataset(train=False, args=args)
     val_loader = datasets.get_loader(ds, bsz=bsz)
     N_val = len(ds)
     
     if args['img_only']:
+        n_cls = 10 if 'cifar100' != args['dataset'] else 100
         if args['arch'] == 'all-conv':
             model = nets.BaseCNN(n_cls=n_cls, dims=dims).cuda()
         elif args['arch'] == 'dense':
-            model = dense.densenet_BC_cifar(depth=64, k=16, num_classes=n_cls).cuda()
+            model = dense.densenet(depth=64, k=16, num_classes=n_cls).cuda()
         elif args['arch'] == 'sota-dense':
-            model = dense.densenet_BC_cifar(depth=250, k=24, num_classes=n_cls).cuda()
+            model = dense.densenet(depth=250, k=24, num_classes=n_cls).cuda()
     else:
-        n_out = args['f'](n_cls-1, args['nU']-1) + args['noise'] + 1
-        model = nets.FilmCNN(nZ=n_cls, dims=dims, nU=args['nU'], nY=n_out).cuda()
+        args['nY'] = args['f'](args['nZ']-1, args['nU']-1) + (args['noise'] > 0)* + 1
+        model = nets.FilmCNN(nZ=args['nZ'], dims=dims, nU=args['nU'], nY=args['nY']).cuda()
         
     par_model = nn.DataParallel(model)
     
@@ -111,7 +111,7 @@ def main(args):
     hist = {'loss': [], 'val-acc': []}
 
     while epoch <= max_epochs:
-        if args['optim'] == 'sgd':
+        if 'scheduler' in locals():
             scheduler.step()
 
         running_loss = 0.0
@@ -141,7 +141,7 @@ def main(args):
         running_loss /= N_train
         
         if running_loss < np.min(loss_hist):
-            torch.save(model.state_dict(), "../history/%s.state" % args['model_name'])
+            torch.save(model.state_dict(), "../results/%s.state" % args['model_name'])
             
         gc.collect()
         torch.cuda.empty_cache()
@@ -202,21 +202,12 @@ def main(args):
     hist['epochs'] = epoch-1
     
     if not args['img_only']:
-        entropy = util.get_entropy(args=args, nZ=n_cls)
-        
-        xuy = ds.synth_vars
-        emp_post = util.emp_post(xuy)
-        true_post = util.true_post(xuy[:,:2], args['f'], noise=args['noise'])
-        pred_post, pX, pU = util.pred_post(preds, xuy[:,:2])
-        hist['true_KL'] = util.kl_div(pred_post, true_post, pX, pU)
-        hist['emp_KL'] = util.kl_div(pred_post, emp_post, pX, pU)
-        hist['true_JS'] = util.js_div(pred_post, true_post, pX, pU)
-        hist['emp_JS'] = util.js_div(pred_post, emp_post, pX, pU)
-        
+        hist['true_KL'], hist['emp_KL'], hist['true_JS'], hist['emp_JS'] = ana.get_stats(ds.synth_vars, args, preds)
+        entropy = ana.get_entropy(args=args, nZ=n_cls)
         hist = {**hist, **entropy, **args}
         hist.pop('f');
         
-    hf.pickle_dump(hist, "../history/%s.hist" % args['model_name'])
+    io.pickle_dump(hist, "../results/%s.hist" % args['model_name'])
         
     df = pd.read_csv(csv_path, index_col=0)
     df.loc[args['model_name']] = [args[k] for k in arg_cols] + [acc] + [
@@ -227,18 +218,23 @@ def main(args):
 def get_args(args=None):
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--dataset', type=str, default='mnist', choices=['mnist', 'fmnist', 'svhn', 'cifar10', 'cifar100'], help='mnist, fmnist, svhn, cifar10 or cifar100')
+    parser.add_argument('--dataset', type=str, default='fmnist', choices=['mnist', 'fmnist', 'svhn', 'cifar10', 'cifar100'], help='mnist, fmnist, svhn, cifar10 or cifar100')
+    parser.add_argument('--N_train', type=int, default=50000, help='number of training examples')
+    parser.add_argument('--nZ', type=int, default=32, help='Number of latent dimensions (does not necessarily match the true number of classes).')
     parser.add_argument('--nU', type=int, default=10, help='Number of possible categories for the context variable.')
     parser.add_argument('--context_dist', type=str, default='uniform', choices=['uniform', 'binomial'], help='Distribution of the context variable.')
-    parser.add_argument('--noise', type=int, default=0, help='Noise in the outcome variable.')
+    parser.add_argument('--noise_dist', type=float, default=0, help='Amount of probability to move away from the mode for the noise (+0).')
+    parser.add_argument('--noise_lim', type=int, default=3, help='Maximum displacement by noise.')
     parser.add_argument('--Y_fn', type=str, default='1+1d1', help='Outcome as a function of z and u. "A+BdC" for (z*A+u*B)//C')
     
     parser.add_argument('--arch', type=str, default='all-conv', choices=['all-conv', 'dense', 'sota-dense'], help='CNN architecture.')
+    parser.add_argument('--u_arch', type=str, default='film', choices=['film', 'cat'], help='How the contextual variables are incorporated into the network.')
     parser.add_argument('--optim', type=str, default='adam', choices=['sgd', 'nest', 'adam'], help='Optimizer.')
     parser.add_argument('--patience', type=int, default=15, help='Loss patience.')
     parser.add_argument('--epochs', type=int, default=750, help='Loss patience.')
 
     parser.add_argument('--mcmc', action="store_true")
+    parser.add_argument('--sgld', action="store_true")
     parser.add_argument('--tboard', action="store_true")
     parser.add_argument('--refresh_data', action="store_true")
     parser.add_argument('--img_only', action="store_true")
@@ -261,7 +257,7 @@ def get_args(args=None):
         args['model_type'] = args['dataset']
         args['nU'] = 0
     else:
-        args['model_type'] = '%s_u%d%s_y%s_n%d' % (args['dataset'], args['nU'], args['context_dist'], args['Y_fn'], args['noise'])
+        args['model_type'] = 'N%d%s_u%d%s_y%s_n%f' % (args['N_train'], args['dataset'], args['nU'], args['context_dist'], args['Y_fn'], args['noise_dist'])
         
     i = args['Y_fn'].find('+')
     j = args['Y_fn'].find('d')
