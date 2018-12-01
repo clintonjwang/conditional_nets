@@ -13,18 +13,18 @@ importlib.reload(main)
 csv_path = '/data/vision/polina/users/clintonw/code/vision_final/results.csv'
 
 def args_to_sh(args, slurm=True, exc_gpu=False, n_gpus=4):
-    ix = 0
-    while exists("/data/vision/polina/users/clintonw/code/vision_final/scripts/cls%d.out" % ix):
-        ix += 1
-
     if slurm:
+        ix = 0
+        while exists("/data/vision/polina/users/clintonw/code/vision_final/scripts/srun%d.out" % ix):
+            ix += 1
         return 'nohup ./srunner.sh cls %d ' % n_gpus + ' '.join(args) + ' > srun%d.out 2> srun%d.err < /dev/null &' % (ix,ix)
 
+    ix = 0
+    while exists("/data/vision/polina/users/clintonw/code/vision_final/scripts/py%d.out" % ix):
+        ix += 1
     if exc_gpu == 1:
         extra = 'CUDA_VISIBLE_DEVICES=1,2,3 '
     elif exc_gpu == 2:
-        extra = 'CUDA_VISIBLE_DEVICES=4,5,6,7 '
-    elif exc_gpu == 3:
         extra = 'CUDA_VISIBLE_DEVICES=1,2,3,4,5,6,7 '
     else:
         extra = ''
@@ -32,17 +32,16 @@ def args_to_sh(args, slurm=True, exc_gpu=False, n_gpus=4):
 
 def get_ordered_experiments():
     arg_list = []
-    
-    arg_list.append(['--N_train', '1000', '--noise_p', '0.3'])
 
     #number of training examples
     for n in range(7):
-        for arch in ['film', 'cat', 'gan']:
-            arg_list.append(['--N_train', str(500*2**n), '--u_arch', arch])
+        arg_list.append(['--N_train', str(60000//2**n), '--arch', 'all-conv'])
+        for arch in ['film', 'cat']:
+            arg_list.append(['--N_train', str(60000//2**n), '--u_arch', arch])
     
     #noise
-    for n in np.linspace(.1,.5,5):
-        for arch in ['film', 'cat', 'gan']:
+    for n in np.round(np.linspace(0,.5,6), 1):
+        for arch in ['film', 'cat']:
             arg_list.append(['--noise_p', str(n), '--u_arch', arch])
         
     #arg_list.append(['--Y_fn', '%d+%dd%d' % (1, 0, 1), '--nU', '256', '--noise', '2'])

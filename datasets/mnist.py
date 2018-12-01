@@ -51,30 +51,3 @@ class FMnistDS(MnistDS):
     def __init__(self, train, **kwargs):
         super(FMnistDS, self).__init__(root=root_dir + '/data/fmnist', train=train, **kwargs)
     
-class SvhnDS(torch_data.SVHN):
-    def __init__(self, train, args, root=root_dir + '/data/svhn', **kwargs):
-        super(SvhnDS, self).__init__(root=root, split='train' if train else 'test', **kwargs)
-        if train:
-            self.imgs = self.data[:args['N_train']]
-            self.labels = self.labels[:args['N_train']]
-            fn = join(self.root, '%s_train.npy' % args['model_type'])
-        else:
-            self.imgs = self.data
-            fn = join(self.root, '%s_val.npy' % args['model_type'])
-        
-        if args['refresh_data'] or not exists(fn):
-            datasets.common.get_cls_data(self, fn=fn, args=args)
-        
-        #self.imgs = self.imgs.view(-1,1,28,28).numpy()
-        self.imgs = self.imgs.view(-1,1,28,28).float() / 255.
-        self.synth_vars = torch.from_numpy(np.load(fn))
-        self.train = train
-
-    def __getitem__(self, index):
-        img, synth_vars = self.imgs[index], self.synth_vars[index]
-        
-        return img, synth_vars
-    
-    def __len__(self):
-        return len(self.labels)
-        

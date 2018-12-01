@@ -38,7 +38,7 @@ class FilmDenseNet(DenseNet):
             elif isinstance(m, nn.Linear):
                 nn.init.constant_(m.bias, 0)"""
 
-    def forward(self, x):
+    def forward(self, x, u):
         features = self.features(x)
         z = F.relu(features, inplace=True)
         z = F.adaptive_avg_pool2d(z, 1).view(z.size(0), -1)

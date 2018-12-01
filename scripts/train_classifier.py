@@ -20,6 +20,7 @@ import niftiutils.io as io
 import niftiutils.nn.submodules as subm
 import networks.base as nets
 import networks.dense as dense
+from networks.infogan import Generator, Discriminator
 import datasets.common as datasets
 import datasets.mnist as mnist
 import datasets.cifar as cifar
@@ -32,7 +33,7 @@ warnings.filterwarnings("ignore")
 csv_path = '/data/vision/polina/users/clintonw/code/vision_final/results.csv'
 log_path = '/data/vision/polina/users/clintonw/code/vision_final/logs'
 
-arg_cols = ['model_type', 'N_train', 'dataset', 'nZ', 'nU', 'context_dist', 'Y_fn', 'noise_p', 'noise_lim', 'optim', 'arch', 'lr', 'wd', 'emp_est_acc', 'true_est_acc']
+arg_cols = ['model_type', 'n_params', 'N_train', 'dataset', 'nU', 'context_dist', 'Y_fn', 'noise_p', 'noise_lim', 'optim', 'arch', 'lr', 'wd', 'h_dim', 'emp_est_acc', 'true_est_acc']
 result_cols = ['acc', 'true_KL', 'emp_KL', 'true_JS', 'emp_JS', 'epochs', 'timestamp']
 
 def write_df(args):
@@ -45,17 +46,17 @@ def write_df(args):
                 raise ValueError('Fix columns in results.csv or delete it.')
     else:
         df = pd.DataFrame(columns=arg_cols + result_cols)
-
+    
     ix = 0
-    args['model_name'] = args['model_type'] + '_%d' % ix
-    while args['model_name'] in df.index:
+    args['model_name'] = args['model_type'] + args['suffix'] + '_%d' % ix
+    while args['model_name'] in df.index or exists("../results/%s.hist" % args['model_name']):
         ix += 1
-        args['model_name'] = args['model_type'] + '_%d' % ix
+        args['model_name'] = args['model_type'] + args['suffix'] + '_%d' % ix
 
-    return args
-
-    df.loc[args['model_name']] = [args[k] for k in arg_cols] + [-1]*(len(result_cols)-1) + [time.time()]
+    df.loc[args['model_name']] = [args[k] if k in args else -1 for k in arg_cols] + [-1]*(len(result_cols)-1) + [time.time()]
     df.to_csv(csv_path)
+    
+    return args
 
 
 def main(args):
@@ -88,35 +89,205 @@ def main(args):
     val_loader = datasets.get_loader(ds, bsz=bsz)
     N_val = len(ds)
     
+    
+    if args['arch'] == 'gan':
+        generator = Generator(args['h_dim'], args['cc_dim'], args['dc_dim']).cuda()
+        discriminator = Discriminator(args['cc_dim'], args['dc_dim']).cuda()
+
+        par_G = nn.DataParallel(generator)
+        par_D = nn.DataParallel(discriminator)
+    
+        g_optimizer = optim.Adam(generator.parameters(), 0.0002, [0.5, 0.999])
+        d_optimizer = optim.Adam(discriminator.parameters(), 0.001, [0.5, 0.999])
+
+        """Train generator and discriminator."""
+        fixed_noise = to_variable(torch.Tensor(np.zeros((args.sample_size, args['h_dim']))))  # For Testing
+        
+        epoch = 1
+        args['continuous_weight'] = .5
+        while epoch <= 20:
+            print('Epoch: ' + str(epoch))
+            par_G.train();
+            par_D.train();
+
+            g_loss_sum, d_loss_sum = 0., 0.
+            for imgs, labels in train_loader:
+                # ===================== Train D =====================#
+                batch_size = images.size(0)
+                noise = to_variable(torch.randn(batch_size, args['h_dim']))
+
+                cc = to_variable(gen_cc(batch_size, args['cc_dim']))
+                dc = to_variable(gen_dc(batch_size, args['dc_dim']))
+
+                # Fake -> Fake & Real -> Real
+                fake_images = par_G(torch.cat((noise, cc, dc),1))
+                d_output_real = par_D(images)
+                d_output_fake = par_D(fake_images)
+
+                d_loss_a = -torch.mean(torch.log(d_output_real[:,0]) + torch.log(1 - d_output_fake[:,0]))
+
+                # Mutual Information Loss
+                output_cc = d_output_fake[:, 1:1+args['cc_dim']]
+                output_dc = d_output_fake[:, 1+args['cc_dim']:]
+                d_loss_cc = torch.mean((((output_cc - 0.0) / 0.5) ** 2))
+                d_loss_dc = -(torch.mean(torch.sum(dc * output_dc, 1)) + torch.mean(torch.sum(dc * dc, 1)))
+
+                d_loss = d_loss_a + args['continuous_weight'] * d_loss_cc + 1.0 * d_loss_dc
+
+                # Optimization
+                #discriminator.zero_grad()
+                par_D.zero_grad()
+                d_loss.backward(retain_graph=True)
+                d_optimizer.step()
+
+                # ===================== Train G =====================#
+                # Fake -> Real
+                g_loss_a = -torch.mean(torch.log(d_output_fake[:,0]))
+
+                g_loss = g_loss_a + args['continuous_weight'] * d_loss_cc + 1.0 * d_loss_dc
+
+                # Optimization
+                #generator.zero_grad()
+                par_G.zero_grad()
+                g_loss.backward()
+                g_optimizer.step()
+                
+            epoch += 1
+
+        epoch = 1
+        loss_sum = 0.
+        while epoch <= num_epochs:
+            print('Epoch: ' + str(epoch))
+            par_G.eval();
+            par_D.eval();
+
+            running_loss = 0.
+            for imgs, labels in train_loader:
+                pass
+                
+            epoch += 1
+        return
+
+    
+    elif args['arch'] == 'autoencoder':
+        generator = Generator(args['h_dim'], args['cc_dim'], args['dc_dim']).cuda()
+        discriminator = Discriminator(args['cc_dim'], args['dc_dim']).cuda()
+
+        par_G = nn.DataParallel(generator)
+        par_D = nn.DataParallel(discriminator)
+    
+        g_optimizer = optim.Adam(generator.parameters(), 0.0002, [0.5, 0.999])
+        d_optimizer = optim.Adam(discriminator.parameters(), 0.001, [0.5, 0.999])
+
+        """Train generator and discriminator."""
+        fixed_noise = to_variable(torch.Tensor(np.zeros((args.sample_size, args['h_dim']))))  # For Testing
+        
+        epoch = 1
+        args['continuous_weight'] = .5
+        while epoch <= 20:
+            print('Epoch: ' + str(epoch))
+            par_G.train();
+            par_D.train();
+
+            g_loss_sum, d_loss_sum = 0., 0.
+            for imgs, labels in train_loader:
+                # ===================== Train D =====================#
+                batch_size = images.size(0)
+                noise = to_variable(torch.randn(batch_size, args['h_dim']))
+
+                cc = to_variable(gen_cc(batch_size, args['cc_dim']))
+                dc = to_variable(gen_dc(batch_size, args['dc_dim']))
+
+                # Fake -> Fake & Real -> Real
+                fake_images = par_G(torch.cat((noise, cc, dc),1))
+                d_output_real = par_D(images)
+                d_output_fake = par_D(fake_images)
+
+                d_loss_a = -torch.mean(torch.log(d_output_real[:,0]) + torch.log(1 - d_output_fake[:,0]))
+
+                # Mutual Information Loss
+                output_cc = d_output_fake[:, 1:1+args['cc_dim']]
+                output_dc = d_output_fake[:, 1+args['cc_dim']:]
+                d_loss_cc = torch.mean((((output_cc - 0.0) / 0.5) ** 2))
+                d_loss_dc = -(torch.mean(torch.sum(dc * output_dc, 1)) + torch.mean(torch.sum(dc * dc, 1)))
+
+                d_loss = d_loss_a + args['continuous_weight'] * d_loss_cc + 1.0 * d_loss_dc
+
+                # Optimization
+                #discriminator.zero_grad()
+                par_D.zero_grad()
+                d_loss.backward(retain_graph=True)
+                d_optimizer.step()
+
+                # ===================== Train G =====================#
+                # Fake -> Real
+                g_loss_a = -torch.mean(torch.log(d_output_fake[:,0]))
+
+                g_loss = g_loss_a + args['continuous_weight'] * d_loss_cc + 1.0 * d_loss_dc
+
+                # Optimization
+                #generator.zero_grad()
+                par_G.zero_grad()
+                g_loss.backward()
+                g_optimizer.step()
+                
+            epoch += 1
+
+        epoch = 1
+        loss_sum = 0.
+        while epoch <= num_epochs:
+            print('Epoch: ' + str(epoch))
+            par_G.eval();
+            par_D.eval();
+
+            running_loss = 0.
+            for imgs, labels in train_loader:
+                pass
+                
+            epoch += 1
+
+    
+    
+    
     if args['img_only']:
         if args['arch'] == 'all-conv':
-            model = nets.BaseCNN(n_cls=args['nZ'], dims=dims).cuda()
+            model = nets.BaseCNN(n_cls=args['nZ'], n_h=args['h_dim'], dims=dims).cuda()
         elif args['arch'] == 'dense':
-            model = dense.densenet(depth=64, k=16, num_classes=args['nZ']).cuda()
+            import networks.dense2 as dense2
+            model = dense2.DenseNet(nClasses=args['nZ'], dims=dims).cuda()
+            #model = dense.densenet(depth=64, k=16, num_classes=args['nZ']).cuda()
         elif args['arch'] == 'sota-dense':
             model = dense.densenet(depth=250, k=24, num_classes=args['nZ']).cuda()
     else:
-        model = nets.FilmCNN(args, dims=dims).cuda()
+        if args['arch'] == 'all-conv':
+            model = nets.FilmCNN(args, dims=dims).cuda()
+        elif args['arch'] == 'dense':
+            import networks.dense2 as dense2
+            model = dense2.FilmDenseNet(args, dims=dims).cuda()
         
         entropy = ana.get_entropy(args=args)
         args = {**args, **entropy}
         # accuracies of the estimators with access to the image labels
         args['emp_est_acc'], args['true_est_acc'] = ana.get_accs(train_zuy=train_zuy, val_zuy=ds.synth_vars, args=args)
 
+    trainable_parameters = filter(lambda p: p.requires_grad, model.parameters())
+    args['n_params'] = sum([np.prod(p.size()) for p in trainable_parameters])
+    
     args = write_df(args)
 
     par_model = nn.DataParallel(model)
     
     if args['tboard']:
-        logger = logs.Logger(log_path)
+        logger = logs.Logger(join(log_path, args['model_name']))
 
     if args['optim'] == 'sgd':
         optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=args['wd'])
-        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[75, 150, 200], gamma=0.1)
-        #scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[150, 225, 300], gamma=0.1)
+        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[150, 225, 300], gamma=0.1)
+        #scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.85)
     elif args['optim'] == 'nest':
         optimizer = optim.SGD(model.parameters(), momentum=.9, nesterov=True, lr=0.1, weight_decay=args['wd'])
-        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[75, 150, 200], gamma=0.1)
+        scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[150, 225, 300], gamma=0.5)
+        #scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.85)
     elif args['optim'] == 'adam':
         optimizer = optim.Adam(model.parameters(), lr=args['lr'], weight_decay=args['wd'])
         
@@ -291,19 +462,20 @@ def get_args(args=None):
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--dataset', type=str, default='fmnist', choices=['mnist', 'fmnist', 'svhn', 'cifar10', 'cifar100'], help='mnist, fmnist, svhn, cifar10 or cifar100')
-    parser.add_argument('--N_train', type=int, default=50000, help='number of training examples')
+    parser.add_argument('--N_train', type=int, default=10000, help='number of training examples')
     parser.add_argument('--nU', type=int, default=10, help='Number of possible categories for the context variable.')
     parser.add_argument('--context_dist', type=str, default='uniform', choices=['uniform', 'binomial'], help='Distribution of the context variable.')
     parser.add_argument('--noise_p', type=float, default=0.1, help='Amount of probability to move away from the mode for the noise (+0).')
     parser.add_argument('--noise_lim', type=int, default=2, help='Maximum displacement by noise.')
     parser.add_argument('--Y_fn', type=str, default='1+1d1', help='Outcome as a function of z and u. "A+BdC" for (z*A+u*B)//C')
     
-    parser.add_argument('--h_dim', type=int, default=32, help='Number of latent dimensions (does not necessarily match the true number of classes).')
-    parser.add_argument('--arch', type=str, default='all-conv', choices=['all-conv', 'dense', 'sota-dense'], help='CNN architecture.')
-    parser.add_argument('--u_arch', type=str, default='film', choices=['film', 'cat', 'gan'], help='How the contextual variables are incorporated into the network.')
-    parser.add_argument('--optim', type=str, default='nest', choices=['sgd', 'nest', 'adam'], help='Optimizer.')
+    parser.add_argument('--h_dim', type=int, default=64, help='Number of image latent dimensions (does not need to match the number of classes).')
+    parser.add_argument('--arch', type=str, default='dense', choices=['all-conv', 'dense', 'sota-dense'], help='CNN architecture.')
+    parser.add_argument('--u_arch', type=str, default='film', choices=['film', 'cat', 'gan', 'autoencoder'], help='How the contextual variables are incorporated into the network.')
+    parser.add_argument('--optim', type=str, default='adam', choices=['sgd', 'nest', 'adam'], help='Optimizer.')
     parser.add_argument('--patience', type=int, default=15, help='Loss patience.')
-    parser.add_argument('--epochs', type=int, default=500, help='Loss patience.')
+    parser.add_argument('--epochs', type=int, default=1000, help='Loss patience.')
+    parser.add_argument('--suffix', type=str, default='', help='.')
 
     parser.add_argument('--mcmc', action="store_true")
     parser.add_argument('--sgld', action="store_true")
@@ -315,6 +487,9 @@ def get_args(args=None):
     parser.add_argument('--lr', type=float, default=0.001, help='learning rate')
     parser.add_argument('--wd', type=float, default=1e-4, help='weight decay')
 
+    parser.add_argument('--cc_dim', type=int, default=8, help='?.')
+    parser.add_argument('--dc_dim', type=int, default=16, help='?.')
+    
     if args is not None:
         args = vars(parser.parse_args(args))
     else:
@@ -324,7 +499,8 @@ def get_args(args=None):
     if args['arch'] == 'sota-dense':
         args['bsz'] = 16
     elif args['arch'] == 'dense':
-        args['bsz'] = 256
+        args['bsz'] = 80 #256
+        args['epochs'] = 50 * np.sqrt(60000//args['N_train'])
         
     i = args['Y_fn'].find('+')
     j = args['Y_fn'].find('d')
@@ -338,7 +514,7 @@ def get_args(args=None):
         args['nU'] = 0
     else:
         args['nY'] = args['f'](args['nZ']-1, args['nU']-1) + (args['noise_p'] > 0)*args['noise_lim'] + 1
-        args['model_type'] = 'N%d%s_u%d%s_y%s_n%.2f' % (args['N_train'], args['dataset'], args['nU'], args['context_dist'], args['Y_fn'], args['noise_p'])
+        args['model_type'] = 'N%dK%s_u%d_y%s_n%d_%s' % (args['N_train']//1000, args['dataset'], args['nU'], args['Y_fn'], args['noise_p']*100, args['u_arch'])
         
     if args['noise_p'] == 0:
         args['noise_lim'] = 0
