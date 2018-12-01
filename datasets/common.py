@@ -31,7 +31,8 @@ def get_split_loaders(ds, batch_size, N_train, random_seed=42):
 
 
 def get_cls_data(ds, args, fn):
-    z = ds.labels.numpy()
+    z = ds.labels.numpy() if type(ds.labels) == torch.Tensor else ds.labels
+
     if args['img_only']:
         np.save(fn, np.expand_dims(z, 1))
         return
@@ -46,10 +47,11 @@ def get_cls_data(ds, args, fn):
         u = np.random.randint(0,nU, z.shape)
 
     # generate the outcome y
-    if args['context_dist'] == 'multinomial':
-        y = np.round(u.sum(1)/64) + z
-    elif args['noise']:
-        y = args['f'](z,u) + np.random.binomial(n=args['noise'], p=2/3, size=z.shape)
+    if args['noise_p'] > 0:
+        rand = np.random.rand(*z.shape)
+        eps = np.ceil(rand*args['noise_lim']/args['noise_p'])
+        eps[eps>args['noise_lim']] = 0
+        y = args['f'](z,u) + eps.astype(int) #np.random.binomial(n=args['noise'], p=2/3, size=z.shape)
     else:
         y = args['f'](z,u)
 

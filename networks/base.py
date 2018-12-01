@@ -40,8 +40,12 @@ class BaseCNN(nn.Module):
 
 
 class FilmCNN(BaseCNN):
-    def __init__(self, dims=(1,28,28), nZ=10, nU=10, nY=19):
+    def __init__(self, args, dims=(1,28,28)):
+        nZ=args['nZ']
+        nU=args['nU']
+        nY=args['nY']
         super(FilmCNN, self).__init__(dims=dims, n_cls=nZ)
+
         self.u_type = args['u_arch']
         self.pre_film = nn.Sequential(
             nn.Linear(nU, 64),

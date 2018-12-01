@@ -8,7 +8,8 @@ import scripts.train_classifier as main
 from joblib import Parallel, delayed
 import multiprocessing
 num_cores = multiprocessing.cpu_count() - 2
-
+import importlib
+importlib.reload(main)
 csv_path = '/data/vision/polina/users/clintonw/code/vision_final/results.csv'
 
 def args_to_sh(args, slurm=True, exc_gpu=False, n_gpus=4):
@@ -32,15 +33,17 @@ def args_to_sh(args, slurm=True, exc_gpu=False, n_gpus=4):
 def get_ordered_experiments():
     arg_list = []
     
-    #number of classes
-    for n in range(2, 11):
-        arg_list.append(['--noise', str(n), '--nZ', '32'])
-        arg_list.append(['--noise', str(n), '--u_arch', 'cat'])
+    arg_list.append(['--N_train', '1000', '--noise_p', '0.3'])
+
+    #number of training examples
+    for n in range(7):
+        for arch in ['film', 'cat', 'gan']:
+            arg_list.append(['--N_train', str(500*2**n), '--u_arch', arch])
     
     #noise
-    for n in range(2, 11):
-        arg_list.append(['--noise', str(n)])
-        arg_list.append(['--noise', str(n), '--u_arch', 'cat'])
+    for n in np.linspace(.1,.5,5):
+        for arch in ['film', 'cat', 'gan']:
+            arg_list.append(['--noise_p', str(n), '--u_arch', arch])
         
     #arg_list.append(['--Y_fn', '%d+%dd%d' % (1, 0, 1), '--nU', '256', '--noise', '2'])
     #arg_list.append(['--Y_fn', '%d+%dd%d' % (0, 1, 16), '--nU', '1024', '--noise', '2'])
@@ -53,15 +56,7 @@ def get_ordered_experiments():
             arg_list.append(['--Y_fn', '%d+%dd%d' % (mult, 1, 1), '--nU', str(nU)])
         for div in range(3, int(nU**.5), 4):
             arg_list.append(['--Y_fn', '%d+%dd%d' % (1, 1, div), '--nU', str(nU)])
-    
-    ix = 0
-    df = pd.read_csv(csv_path, index_col=0)
-    while ix < len(arg_list):
-        if main.get_args(arg_list[ix])['model_type'] in set(df['model_type']):
-            arg_list.pop(ix);
-        else:
-            ix += 1
-        
+
     # visual complexity
     datasets = ['mnist', 'fmnist', 'cifar10', 'cifar100']#, 'svhn', 'cifar100']
     for ds in datasets:
@@ -85,15 +80,26 @@ def get_ordered_experiments():
     arg_list.append(['--Y_fn', '%d+%dd%d' % (1, 0, 1), '--nU', '256'])
     arg_list.append(['--Y_fn', '%d+%dd%d' % (0, 1, 16), '--nU', '1024'])
     
+
+    
+    ix = 0
+    df = pd.read_csv(csv_path, index_col=0)
+    while ix < len(arg_list):
+        if main.get_args(arg_list[ix])['model_type'] in set(df['model_type']):
+            arg_list.pop(ix);
+        else:
+            ix += 1
+        
+
     return arg_list
 
 def clean_df():
     df = pd.read_csv(csv_path, index_col=0)
-    df = df[df['acc'] != -1]
+    df = df[(df['acc'] != -1) & (df['epochs'] > 10)]
     
-    for fn in os.listdir('history'):
+    for fn in os.listdir('results'):
         if fn[:fn.find('.')] not in df.index:
-            os.remove('history/'+fn)
+            os.remove('results/'+fn)
             
     for Fn in glob.glob('data/*/*.npy'):
         fn = basename(Fn)
