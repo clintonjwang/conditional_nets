@@ -1,8 +1,9 @@
 data/
-datasets/
 history/
 logs/
 results/
+scripts/*.out
+scripts/*.err
 *.npy
 *.csv
 *.out

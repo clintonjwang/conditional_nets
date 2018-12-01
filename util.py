@@ -33,22 +33,23 @@ def args_to_sh(args, slurm=True, exc_gpu=False, n_gpus=4):
 def get_ordered_experiments():
     arg_list = []
 
+    for n in range(6):
+        arg_list.append(['--N_train', str(60000//2**n), '--u_arch', 'film', '--arch', 'ae'])
+    #for n in np.round(np.linspace(0,.5,6), 1):
+    #    arg_list.append(['--noise_p', str(n), '--u_arch', 'film', '--arch', 'ae'])
+
     #number of training examples
-    for n in range(7):
-        arg_list.append(['--N_train', str(60000//2**n), '--arch', 'all-conv'])
-        for arch in ['film', 'cat']:
-            arg_list.append(['--N_train', str(60000//2**n), '--u_arch', arch])
-    
+    #for n in range(6):
+    #    arg_list.append(['--N_train', str(60000//2**n), '--arch', 'all-conv', '--u_arch', 'cat'])
+
     #noise
-    for n in np.round(np.linspace(0,.5,6), 1):
-        for arch in ['film', 'cat']:
-            arg_list.append(['--noise_p', str(n), '--u_arch', arch])
-        
-    #arg_list.append(['--Y_fn', '%d+%dd%d' % (1, 0, 1), '--nU', '256', '--noise', '2'])
-    #arg_list.append(['--Y_fn', '%d+%dd%d' % (0, 1, 16), '--nU', '1024', '--noise', '2'])
+    #for n in np.round(np.linspace(0,.5,6), 1):
+    #    for arch in ['dense', 'all-conv']:
+    #        arg_list.append(['--noise_p', str(n), '--u_arch', 'cat', '--arch', arch])
+
         
     #optional
-    for u in range(2, 11, 2):
+    """for u in range(2, 11, 2):
         nU = round(1.5**u)
         for mult in range(3, 12, 4):
             arg_list.append(['--Y_fn', '%d+%dd%d' % (1, mult, 1), '--nU', str(nU)])
@@ -71,14 +72,13 @@ def get_ordered_experiments():
             arg_list.append(['--dataset', ds, '--arch', 'dense', '--optim', 'nest', '--nU', '100', '--Y_fn', '%d+%dd%d' % (1, 1, 10)])
         else:
             arg_list.append(['--dataset', ds])
-    
+
     # contextual complexity
     for u in range(2, 11, 2):
         nU = round(1.5**u)
         arg_list.append(['--Y_fn', '%d+%dd%d' % (1, 1, 1), '--nU', str(nU)])
     arg_list.append(['--Y_fn', '%d+%dd%d' % (1, 0, 1), '--nU', '256'])
-    arg_list.append(['--Y_fn', '%d+%dd%d' % (0, 1, 16), '--nU', '1024'])
-    
+    arg_list.append(['--Y_fn', '%d+%dd%d' % (0, 1, 16), '--nU', '1024'])"""
 
     
     ix = 0
@@ -89,7 +89,6 @@ def get_ordered_experiments():
         else:
             ix += 1
         
-
     return arg_list
 
 def clean_df():

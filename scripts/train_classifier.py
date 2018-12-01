@@ -26,6 +26,7 @@ import datasets.mnist as mnist
 import datasets.cifar as cifar
 import util
 import analysis as ana
+import networks.dense2 as dense2
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -33,7 +34,7 @@ warnings.filterwarnings("ignore")
 csv_path = '/data/vision/polina/users/clintonw/code/vision_final/results.csv'
 log_path = '/data/vision/polina/users/clintonw/code/vision_final/logs'
 
-arg_cols = ['model_type', 'n_params', 'N_train', 'dataset', 'nU', 'context_dist', 'Y_fn', 'noise_p', 'noise_lim', 'optim', 'arch', 'lr', 'wd', 'h_dim', 'emp_est_acc', 'true_est_acc']
+arg_cols = ['model_type', 'n_params', 'N_train', 'dataset', 'nU', 'context_dist', 'Y_fn', 'noise_p', 'noise_lim', 'optim', 'arch', 'u_arch', 'lr', 'wd', 'h_dim', 'emp_est_acc', 'true_est_acc']
 result_cols = ['acc', 'true_KL', 'emp_KL', 'true_JS', 'emp_JS', 'epochs', 'timestamp']
 
 def write_df(args):
@@ -167,103 +168,24 @@ def main(args):
                 
             epoch += 1
         return
-
-    
-    elif args['arch'] == 'autoencoder':
-        generator = Generator(args['h_dim'], args['cc_dim'], args['dc_dim']).cuda()
-        discriminator = Discriminator(args['cc_dim'], args['dc_dim']).cuda()
-
-        par_G = nn.DataParallel(generator)
-        par_D = nn.DataParallel(discriminator)
-    
-        g_optimizer = optim.Adam(generator.parameters(), 0.0002, [0.5, 0.999])
-        d_optimizer = optim.Adam(discriminator.parameters(), 0.001, [0.5, 0.999])
-
-        """Train generator and discriminator."""
-        fixed_noise = to_variable(torch.Tensor(np.zeros((args.sample_size, args['h_dim']))))  # For Testing
-        
-        epoch = 1
-        args['continuous_weight'] = .5
-        while epoch <= 20:
-            print('Epoch: ' + str(epoch))
-            par_G.train();
-            par_D.train();
-
-            g_loss_sum, d_loss_sum = 0., 0.
-            for imgs, labels in train_loader:
-                # ===================== Train D =====================#
-                batch_size = images.size(0)
-                noise = to_variable(torch.randn(batch_size, args['h_dim']))
-
-                cc = to_variable(gen_cc(batch_size, args['cc_dim']))
-                dc = to_variable(gen_dc(batch_size, args['dc_dim']))
-
-                # Fake -> Fake & Real -> Real
-                fake_images = par_G(torch.cat((noise, cc, dc),1))
-                d_output_real = par_D(images)
-                d_output_fake = par_D(fake_images)
-
-                d_loss_a = -torch.mean(torch.log(d_output_real[:,0]) + torch.log(1 - d_output_fake[:,0]))
-
-                # Mutual Information Loss
-                output_cc = d_output_fake[:, 1:1+args['cc_dim']]
-                output_dc = d_output_fake[:, 1+args['cc_dim']:]
-                d_loss_cc = torch.mean((((output_cc - 0.0) / 0.5) ** 2))
-                d_loss_dc = -(torch.mean(torch.sum(dc * output_dc, 1)) + torch.mean(torch.sum(dc * dc, 1)))
-
-                d_loss = d_loss_a + args['continuous_weight'] * d_loss_cc + 1.0 * d_loss_dc
-
-                # Optimization
-                #discriminator.zero_grad()
-                par_D.zero_grad()
-                d_loss.backward(retain_graph=True)
-                d_optimizer.step()
-
-                # ===================== Train G =====================#
-                # Fake -> Real
-                g_loss_a = -torch.mean(torch.log(d_output_fake[:,0]))
-
-                g_loss = g_loss_a + args['continuous_weight'] * d_loss_cc + 1.0 * d_loss_dc
-
-                # Optimization
-                #generator.zero_grad()
-                par_G.zero_grad()
-                g_loss.backward()
-                g_optimizer.step()
-                
-            epoch += 1
-
-        epoch = 1
-        loss_sum = 0.
-        while epoch <= num_epochs:
-            print('Epoch: ' + str(epoch))
-            par_G.eval();
-            par_D.eval();
-
-            running_loss = 0.
-            for imgs, labels in train_loader:
-                pass
-                
-            epoch += 1
-
-    
-    
     
     if args['img_only']:
         if args['arch'] == 'all-conv':
             model = nets.BaseCNN(n_cls=args['nZ'], n_h=args['h_dim'], dims=dims).cuda()
         elif args['arch'] == 'dense':
-            import networks.dense2 as dense2
-            model = dense2.DenseNet(nClasses=args['nZ'], dims=dims).cuda()
+            model = dense2.DenseNet(nClasses=args['nZ'], dims=dims, dropout=args['dropout']).cuda()
             #model = dense.densenet(depth=64, k=16, num_classes=args['nZ']).cuda()
         elif args['arch'] == 'sota-dense':
             model = dense.densenet(depth=250, k=24, num_classes=args['nZ']).cuda()
+        elif args['arch'] == 'ae':
+            model = nets.AE(n_cls=args['nZ'], n_h=args['h_dim'], dims=dims).cuda()
     else:
         if args['arch'] == 'all-conv':
             model = nets.FilmCNN(args, dims=dims).cuda()
         elif args['arch'] == 'dense':
-            import networks.dense2 as dense2
-            model = dense2.FilmDenseNet(args, dims=dims).cuda()
+            model = dense2.FilmDenseNet(args, dims=dims, dropout=args['dropout']).cuda()
+        elif args['arch'] == 'ae':
+            model = nets.FilmAE(args, dims=dims).cuda()
         
         entropy = ana.get_entropy(args=args)
         args = {**args, **entropy}
@@ -306,28 +228,10 @@ def main(args):
         print('Epoch: %d / ' % (epoch), end='')
         par_model.train();
 
-        for imgs, labels in train_loader:
-            optimizer.zero_grad()
-            
-            imgs, labels = imgs.cuda(), labels.cuda()
-            if args['img_only']:
-                target = labels[:,0].long()
-                if args['mcmc']:
-                    pred = torch.stack([par_model(imgs) for _ in range(n_samples)], 0).mean(0)
-                else:
-                    pred = par_model(imgs)
-            else:
-                context = torch.zeros(labels.size(0), args['nU'], dtype=torch.float).cuda()
-                context.scatter_(1, labels[:,1].view(-1,1), 1.)
-                target = labels[:,-1].long()
-                pred = par_model(imgs, context)
-            
-            loss = criterion(pred, target)
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item() * imgs.size(0)
-
+        running_loss, sample_train_imgs = run_model(par_model, train_loader, args, optimizer, criterion)
         running_loss /= args['N_train']
+        
+        print("Loss: %.2f / " % (running_loss), end='')
         
         if running_loss < np.min(loss_hist):
             torch.save(model.state_dict(), "../results/%s.state" % args['model_name'])
@@ -336,44 +240,10 @@ def main(args):
         torch.cuda.empty_cache()
         par_model.eval();
 
-        print("Loss: %.2f / " % (running_loss), end='')
-        if imgs.size(1) == 1:
-            sample_train_imgs = imgs[:5,0].cpu().numpy()
-        else:
-            sample_train_imgs = imgs[:5].cpu().numpy()
-        
-        acc = 0.
-        preds = []
-        for imgs, labels in val_loader:
-            imgs, labels = imgs.cuda(), labels.cuda()
-            if args['img_only']:
-                target = labels[:,0].long()
-                if args['mcmc']:
-                    post = torch.stack([par_model(imgs) for _ in range(n_samples)], 0)
-                    pred = post.mean(0)
-                else:
-                    pred = par_model(imgs)
-            else:
-                target = labels[:,-1].long()
-                context = torch.zeros(labels.size(0), args['nU'], dtype=torch.float).cuda()
-                context.scatter_(1, labels[:,1].view(-1,1), 1.)
-                pred = par_model(imgs, context)
-            
-            est = torch.max(pred, dim=1)[1]
-            if args['mcmc']:
-                mode_acc += (est == post).sum().item()
-            acc += (est == target).sum().item()
-            
-            pred = F.softmax(pred, dim=1)
-            preds.append(pred.detach().cpu().numpy())
-            
-        preds = np.concatenate(preds,0)
-        
+        acc, preds = run_model(par_model, val_loader, args)
         acc /= N_val
-        if args['mcmc']:
-            print("Val accuracy: mean estimator %.1f%%, mode estimator %.1f%%" % (100*acc, 100*mode_acc))
-        else:
-            print("Val accuracy: %.1f%%" % (100*acc))
+
+        print("Val accuracy: %.1f%%" % (100*acc))
         hist['loss'].append(running_loss)
         hist['val-acc'].append(acc)
             
@@ -400,69 +270,69 @@ def main(args):
     io.pickle_dump(hist, "../results/%s.hist" % args['model_name'])
         
     df = pd.read_csv(csv_path, index_col=0)
-    df.loc[args['model_name']] = [hist[k] if k in hist else -1 for k in arg_cols + result_cols]
+    df.loc[args['model_name']] = [hist[k] if k in hist else -1 for k in df.columns]
     df.to_csv(csv_path)
         
 
-def run_model(M, loader, args, optimizer=None):
+def run_model(M, loader, args, optimizer=None, criterion=None):
     train = optimizer is not None
-    total_loss,acc,den = 0.,0.,0.001
-    for batch in loader:
-        if args['modality'] is 'none':
-            clinvars, accnums = batch
-            mRS = clinvars[:,0].cuda()
-            clinvars = clinvars[:,1:].cuda()
-            #accnums = np.array(accnums)
-        else:
-            imgs, clinvars, accnums = batch
-            if args['modality'] == 'all':
-                imgs, clinvars, mRS, accnums = mutil.split_gpus(imgs, clinvars, accnums)
-            else:
-                imgs = imgs.cuda()
-                mRS = clinvars[:,0].cuda()
-                clinvars = clinvars[:,1:].cuda()
-                #accnums = np.array(accnums)
+    acc, total_loss = 0., 0.
+    preds = []
+    for imgs, labels in loader:
+        imgs, labels = imgs.cuda(), labels.cuda()
 
         if train:
             optimizer.zero_grad()
-        
-        pred = M(imgs, clinvars)
-        
-        if args['modality'] == 'all':
-            clinvars = torch.cat(clinvars, dim=0)
-        losses = [torch.abs(pred[:,C.maxmRS+C.xent:][clinvars != 0] - clinvars[clinvars != 0]).mean()]
-        if sum(mRS >= 0) > 0:
-            pred = pred[mRS >= 0, :C.maxmRS+C.xent]
-            mRS = mRS[mRS >= 0].long()
-            losses.append(args['loss_fn'](pred, mRS) * 50)
 
-            if not C.xent:
-                pred = nn_loss.get_marginals(pred)
-
-            pred = torch.max(pred, dim=1)[1]
-
-            acc += (pred == mRS).sum().item()
-            den += len(mRS)
-        if torch.isnan(losses[0]):
-            losses = losses[1:]
-            if len(losses) == 0:
-                continue
-        loss = sum(losses)
+        if args['img_only']:
+            target = labels[:,0].long()
+            if args['mcmc']:
+                post = torch.stack([M(imgs) for _ in range(n_samples)], 0)
+                pred = post.mean(0)
+            else:
+                pred = M(imgs)
+        else:
+            target = labels[:,-1].long()
+            context = torch.zeros(labels.size(0), args['nU'], dtype=torch.float).cuda()
+            context.scatter_(1, labels[:,1].view(-1,1), 1.)
+            pred = M(imgs, context)
         
         if train:
+            if args['arch'] == 'ae':
+                loss = criterion(pred[0], target) + .5*((pred[1] - imgs)**2).mean()
+            else:
+                loss = criterion(pred, target)
             loss.backward()
             optimizer.step()
+            total_loss += loss.item() * imgs.size(0)
+        else:
+            if args['arch'] == 'ae':
+                pred = pred[0]
+            est = torch.max(pred, dim=1)[1]
+            if args['mcmc']:
+                mode_acc += (est == post).sum().item()
+            acc += (est == target).sum().item()
             
-        total_loss += loss.item()
-
-    return total_loss, acc/den
+            pred = F.softmax(pred, dim=1)
+            preds.append(pred.detach().cpu().numpy())
+    
+    if imgs.size(1) == 1:
+        sample_train_imgs = imgs[:5,0].cpu().numpy()
+    else:
+        sample_train_imgs = imgs[:5].cpu().numpy()
+        
+    if train:
+        return total_loss, sample_train_imgs
+    else:
+        preds = np.concatenate(preds,0)
+        return acc, preds
 
 
 def get_args(args=None):
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--dataset', type=str, default='fmnist', choices=['mnist', 'fmnist', 'svhn', 'cifar10', 'cifar100'], help='mnist, fmnist, svhn, cifar10 or cifar100')
-    parser.add_argument('--N_train', type=int, default=10000, help='number of training examples')
+    parser.add_argument('--N_train', type=int, default=15000, help='number of training examples')
     parser.add_argument('--nU', type=int, default=10, help='Number of possible categories for the context variable.')
     parser.add_argument('--context_dist', type=str, default='uniform', choices=['uniform', 'binomial'], help='Distribution of the context variable.')
     parser.add_argument('--noise_p', type=float, default=0.1, help='Amount of probability to move away from the mode for the noise (+0).')
@@ -470,8 +340,8 @@ def get_args(args=None):
     parser.add_argument('--Y_fn', type=str, default='1+1d1', help='Outcome as a function of z and u. "A+BdC" for (z*A+u*B)//C')
     
     parser.add_argument('--h_dim', type=int, default=64, help='Number of image latent dimensions (does not need to match the number of classes).')
-    parser.add_argument('--arch', type=str, default='dense', choices=['all-conv', 'dense', 'sota-dense'], help='CNN architecture.')
-    parser.add_argument('--u_arch', type=str, default='film', choices=['film', 'cat', 'gan', 'autoencoder'], help='How the contextual variables are incorporated into the network.')
+    parser.add_argument('--arch', type=str, default='all-conv', choices=['all-conv', 'dense', 'sota-dense', 'ae', 'dense-gan', 'dense-ae'], help='CNN architecture.')
+    parser.add_argument('--u_arch', type=str, default='film', choices=['film', 'cat'], help='How the contextual variables are incorporated into the network.')
     parser.add_argument('--optim', type=str, default='adam', choices=['sgd', 'nest', 'adam'], help='Optimizer.')
     parser.add_argument('--patience', type=int, default=15, help='Loss patience.')
     parser.add_argument('--epochs', type=int, default=1000, help='Loss patience.')
@@ -486,6 +356,7 @@ def get_args(args=None):
     parser.add_argument('--bsz', type=int, default=2048, help='batch size per GPU')
     parser.add_argument('--lr', type=float, default=0.001, help='learning rate')
     parser.add_argument('--wd', type=float, default=1e-4, help='weight decay')
+    parser.add_argument('--dropout', type=float, default=0., help='dropout')
 
     parser.add_argument('--cc_dim', type=int, default=8, help='?.')
     parser.add_argument('--dc_dim', type=int, default=16, help='?.')
@@ -500,7 +371,8 @@ def get_args(args=None):
         args['bsz'] = 16
     elif args['arch'] == 'dense':
         args['bsz'] = 80 #256
-        args['epochs'] = 50 * np.sqrt(60000//args['N_train'])
+        if args['epochs']==1000:
+            args['epochs'] = 50 * np.sqrt(60000//args['N_train'])
         
     i = args['Y_fn'].find('+')
     j = args['Y_fn'].find('d')
@@ -514,7 +386,7 @@ def get_args(args=None):
         args['nU'] = 0
     else:
         args['nY'] = args['f'](args['nZ']-1, args['nU']-1) + (args['noise_p'] > 0)*args['noise_lim'] + 1
-        args['model_type'] = 'N%dK%s_u%d_y%s_n%d_%s' % (args['N_train']//1000, args['dataset'], args['nU'], args['Y_fn'], args['noise_p']*100, args['u_arch'])
+        args['model_type'] = 'N%dK%s_u%d_y%s_n%d_%s_%s' % (args['N_train']//1000, args['dataset'], args['nU'], args['Y_fn'], args['noise_p']*100, args['arch'], args['u_arch'])
         
     if args['noise_p'] == 0:
         args['noise_lim'] = 0

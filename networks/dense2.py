@@ -59,10 +59,10 @@ class Transition(nn.Module):
 
 
 class DenseNet(nn.Module):
-    drop = nn.Dropout2d(.5)
     
-    def __init__(self, dims=(1,28,28), growthRate=12, depth=100, reduction=0.5, bottleneck=True, nClasses=10):
+    def __init__(self, dims=(1,28,28), growthRate=12, depth=100, reduction=0.5, bottleneck=True, nClasses=10, dropout=0.):
         super(DenseNet, self).__init__()
+        self.drop = nn.Dropout2d(dropout)
 
         nDenseBlocks = (depth-4) // 3
         if bottleneck:
@@ -181,7 +181,7 @@ class FilmDenseAE(FilmDenseNet):
     def __init__(self, args, **kwargs):
         super(FilmDenseNet, self).__init__(args, **kwargs)
         self.recon_fc = nn.Sequential(
-            nn.Linear(z_dim + cc_dim + dc_dim, 1024),
+            nn.Linear(args['h_dim'], 1024),
             nn.BatchNorm2d(1024),
             nn.ReLU(),
 
@@ -196,14 +196,11 @@ class FilmDenseAE(FilmDenseNet):
             nn.ReLU(),
 
             # -> [-1, 1, 28, 28]
-            nn.ConvTranspose2d(64,1,4,2,1),
-            nn.Tanh()
+            nn.ConvTranspose2d(64,1,4,2,1)
         )
         
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight)
-            elif isinstance(m, nn.BatchNorm2d):
+        for m in self.recon_fc:
+            if isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Linear):

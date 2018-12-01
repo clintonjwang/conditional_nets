@@ -87,3 +87,54 @@ class FilmCNN(BaseCNN):
             uh = torch.mul(u[:,:self.n_h], h) + u[:,self.n_h:]
             y = self.film(uh)
         return y
+
+
+class FilmAE(FilmCNN):
+    def __init__(self, args, **kwargs):
+        super(FilmAE, self).__init__(args, **kwargs)
+        self.recon_fc = nn.Sequential(
+            nn.Linear(args['h_dim'], 1024),
+            nn.Dropout(.2, True),
+            nn.ReLU(),
+
+            nn.Linear(1024, 128*7*7),
+            nn.Dropout(.2, True),
+            nn.ReLU()
+        )
+        self.deconv = nn.Sequential(
+            # [-1, 128, 7, 7] -> [-1, 64, 14, 14]
+            nn.ConvTranspose2d(128,64,4,2,1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+
+            # -> [-1, 1, 28, 28]
+            nn.ConvTranspose2d(64,1,4,2,1),
+            nn.Sigmoid()
+        )
+        
+        for m in self.recon_fc:
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x, u):
+        h = self.conv(x)
+        h = self.global_pool(h).view(h.size(0), -1)
+
+        u = self.pre_film(u)
+        if self.u_type == 'cat':
+            uh = torch.cat([u, h], 1)
+            y = self.cat(uh)
+        else:
+            uh = torch.mul(u[:,:self.n_h], h) + u[:,self.n_h:]
+            y = self.film(uh)
+
+        z = self.recon_fc(h)
+        z = z.view(-1, 128, 7, 7)
+        recon = self.deconv(z)*1.1-.05
+
+        return y, recon
