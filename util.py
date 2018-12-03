@@ -34,10 +34,12 @@ def get_ordered_experiments():
     arg_list = []
 
     for n in range(6):
-        arg_list.append(['--N_train', str(60000//2**n), '--u_arch', 'film', '--arch', 'ae'])
-    #for n in np.round(np.linspace(0,.5,6), 1):
-    #    arg_list.append(['--noise_p', str(n), '--u_arch', 'film', '--arch', 'ae'])
-
+        #arg_list.append(['--N_train', str(60000//2**n), '--mc_drop', '0.3'])
+        arg_list.append(['--N_train', str(60000//2**n), '--mc_drop', '0.3', '--arch', 'dense'])
+    for n in np.round(np.linspace(0,.5,6), 1):
+        #arg_list.append(['--noise_p', str(n), '--mc_drop', '0.3'])
+        arg_list.append(['--noise_p', str(n), '--mc_drop', '0.3', '--arch', 'dense'])
+    #, '--u_arch', 'film', '--arch', 'dense'
     #number of training examples
     #for n in range(6):
     #    arg_list.append(['--N_train', str(60000//2**n), '--arch', 'all-conv', '--u_arch', 'cat'])
@@ -47,7 +49,6 @@ def get_ordered_experiments():
     #    for arch in ['dense', 'all-conv']:
     #        arg_list.append(['--noise_p', str(n), '--u_arch', 'cat', '--arch', arch])
 
-        
     #optional
     """for u in range(2, 11, 2):
         nU = round(1.5**u)

@@ -5,19 +5,20 @@ import math
 nn = torch.nn
 
 class BaseCNN(nn.Module):
-    def __init__(self, n_h, dims=(1,28,28), n_cls=10):
+    def __init__(self, n_h, dims=(1,28,28), n_cls=10, dropout=0.):
         super(BaseCNN, self).__init__()
         self.dims = dims
         self.n_h = n_h
         self.conv = nn.Sequential(
             nn.Conv2d(dims[0], 64, kernel_size=5),
+            nn.Dropout2d(dropout, True),
             nn.MaxPool2d(2),
             nn.ReLU(True),
             #nn.Conv2d(64, 64, kernel_size=3, padding=1),
             #nn.Dropout2d(.2),
             #nn.LeakyReLU(.1,True),
             nn.Conv2d(64, self.n_h, kernel_size=5),
-            nn.Dropout2d(.2),
+            nn.Dropout2d(dropout, True),
             nn.MaxPool2d(2),
             nn.ReLU(True)
         )
@@ -45,28 +46,27 @@ class BaseCNN(nn.Module):
 
 class FilmCNN(BaseCNN):
     def __init__(self, args, dims=(1,28,28)):
-        nZ=args['nZ']
-        nU=args['nU']
         nY=args['nY']
-        super(FilmCNN, self).__init__(dims=dims, n_h=args['h_dim'], n_cls=nZ)
-
+        dropout = args['mc_drop']
+        super(FilmCNN, self).__init__(dims=dims, n_h=args['h_dim'], n_cls=args['nZ'], dropout=dropout)
+        
         self.global_pool = nn.AdaptiveAvgPool2d(1)
         self.u_type = args['u_arch']
         self.pre_film = nn.Sequential(
             nn.Linear(args['nU'], 128),
-            nn.Dropout(.2),
+            nn.Dropout(dropout, True),
             nn.ReLU(True),
             nn.Linear(128, self.n_h*2)
         )
         self.cat = nn.Sequential(
             nn.Linear(self.n_h*3, 128),
-            nn.Dropout(.2),
+            nn.Dropout(dropout, True),
             nn.ReLU(True),
             nn.Linear(128, nY)
         )
         self.film = nn.Sequential(
             nn.Linear(self.n_h, 128),
-            nn.Dropout(.2),
+            nn.Dropout(dropout, True),
             nn.ReLU(True),
             nn.Linear(128, nY)
         )

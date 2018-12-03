@@ -62,6 +62,7 @@ class DenseNet(nn.Module):
     
     def __init__(self, dims=(1,28,28), growthRate=12, depth=100, reduction=0.5, bottleneck=True, nClasses=10, dropout=0.):
         super(DenseNet, self).__init__()
+        self.drop_rate = dropout
         self.drop = nn.Dropout2d(dropout)
 
         nDenseBlocks = (depth-4) // 3
@@ -107,11 +108,13 @@ class DenseNet(nn.Module):
                 layers.append(Bottleneck(nChannels, growthRate))
             else:
                 layers.append(SingleLayer(nChannels, growthRate))
+            layers.append(nn.Dropout(self.drop_rate, True))
             nChannels += growthRate
         return nn.Sequential(*layers)
 
     def forward(self, x):
         out = self.conv1(x)
+        out = self.drop(out)
         out = self.trans1(self.dense1(out))
         out = self.drop(out)
         out = self.trans2(self.dense2(out))
@@ -179,14 +182,14 @@ class FilmDenseNet(DenseNet):
 
 class FilmDenseAE(FilmDenseNet):
     def __init__(self, args, **kwargs):
-        super(FilmDenseNet, self).__init__(args, **kwargs)
+        super(FilmDenseAE, self).__init__(args=args, **kwargs)
         self.recon_fc = nn.Sequential(
             nn.Linear(args['h_dim'], 1024),
-            nn.BatchNorm2d(1024),
+            nn.Dropout(.2, True),
             nn.ReLU(),
 
             nn.Linear(1024, 128*7*7),
-            nn.BatchNorm2d(128*7*7),
+            nn.Dropout(.2, True),
             nn.ReLU()
         )
         self.deconv = nn.Sequential(
