@@ -31,7 +31,9 @@ class SVHN(torch_data.SVHN):
     def __init__(self, train, args, root=root_dir + '/data/svhn', **kwargs):
         super(SVHN, self).__init__(root=root, split='train' if train else 'test', **kwargs)
         if train:
-            self.imgs = np.transpose(self.data[:args['N_train']], (0,2,3,1))
+            if 'ae' not in args['arch']:
+                self.data = self.data[:args['N_train']]
+            self.imgs = np.transpose(self.data, (0,2,3,1))
             self.labels = self.labels[:args['N_train']]
             fn = join(self.root, '%s_train.npy' % args['model_type'])
         else:

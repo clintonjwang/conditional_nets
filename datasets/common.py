@@ -40,7 +40,7 @@ def get_cls_data(ds, args, fn):
     
     # generate the contextual variable u
     if args['context_dist'] == 'binomial':
-        u = np.random.binomial(nU, (z+1)/(args['nZ']+1))
+        u = np.random.binomial(nU-1, (z+1)/(args['nZ']+1))
     elif args['context_dist'] == 'multinomial':
         u = np.random.randint(0,nU, (z.shape[0],64))
     else:

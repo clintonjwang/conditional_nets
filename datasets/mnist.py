@@ -17,8 +17,11 @@ class MnistDS(torch_data.MNIST):
     def __init__(self, train, args, root=root_dir + '/data/mnist', **kwargs):
         super(MnistDS, self).__init__(root=root, train=train, **kwargs)
         if train:
-            self.imgs = self.train_data[:args['N_train']]
-            self.labels = self.train_labels[:args['N_train']]
+            if 'ae' not in args['arch']:
+                self.train_data = self.train_data[:args['N_train']]
+                self.train_labels = self.train_labels[:args['N_train']]
+            self.imgs = self.train_data
+            self.labels = self.train_labels
             fn = join(self.root, '%s_train.npy' % args['model_type'])
         else:
             self.imgs = self.test_data
@@ -31,6 +34,12 @@ class MnistDS(torch_data.MNIST):
         #self.imgs = self.imgs.view(-1,1,28,28).numpy()
         self.imgs = self.imgs.view(-1,1,28,28).float() / 255.
         self.synth_vars = torch.from_numpy(np.load(fn))
+        if train:
+            if 'ae' in args['arch']:
+                self.synth_vars[args['N_train']:] = -1
+            else:
+                self.synth_vars = self.synth_vars[:args['N_train']]
+
         self.train = train
 
     def __getitem__(self, index):

@@ -138,7 +138,7 @@ def main(args):
         optimizer = optim.Adam(model.parameters(), lr=args['lr'], weight_decay=args['wd'])
     
     if args['loss'] == 'xent':
-        criterion = nn.CrossEntropyLoss().cuda()
+        criterion = nn.CrossEntropyLoss(ignore_index=-1).cuda()
     elif args['loss'] == 'kl':
         def criterion(pred, target):
             # KL divergence between empirical p(Y_U) and predicted p(Y_U)
@@ -213,6 +213,7 @@ def main(args):
     df.loc[args['model_name']] = [hist[k] if k in hist else -1 for k in df.columns]
     df.to_csv(csv_path)
 
+
 def run_model(M, loader, args, optimizer=None, criterion=None, mc=False):
     train = optimizer is not None
     acc, total_loss = 0., 0.
@@ -248,7 +249,7 @@ def run_model(M, loader, args, optimizer=None, criterion=None, mc=False):
         
         if train:
             if 'ae' in args['arch']:
-                loss = criterion(pred[0], target) + args['w_recon']*((pred[1] - imgs)**2).mean()
+                loss = criterion(pred[0], target) + args['w_recon']*torch.abs(pred[1] - imgs).mean()
             else:
                 loss = criterion(pred, target)
             loss.backward()
@@ -346,7 +347,11 @@ def get_args(args=None):
         args['nU'] = 0
     else:
         args['nY'] = args['f'](args['nZ']-1, args['nU']-1) + (args['noise_p'] > 0)*args['noise_lim'] + 1
-        args['model_type'] = 'N%dK%s_u%d_y%s_n%d_%s_%s' % (args['N_train']//1000, args['dataset'], args['nU'], args['Y_fn'], args['noise_p']*100, args['arch'], args['u_arch']) + (args['mc_drop']>0)*('drop%d'%(args['mc_drop']*10)) + ((args['loss']=='kl')*'_kl')
+        args['model_type'] = 'N%dK%s_u%d_y%s_n%d_%s_%s' % (args['N_train']//1000, args['dataset'], args['nU'],
+            args['Y_fn'], args['noise_p']*100, args['arch'], args['u_arch']) + (
+            args['mc_drop']>0)*('drop%d'%(args['mc_drop']*10)) + ((args['loss']=='kl')*'_kl') + (
+            (args['context_dist']=='binomial')*'_bin') + (
+            ((args['epochs']>=300) and (args['arch']=='dense'))*'_long')
         
     if args['noise_p'] == 0:
         args['noise_lim'] = 0
