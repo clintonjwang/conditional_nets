@@ -36,7 +36,7 @@ class MnistDS(torch_data.MNIST):
         self.synth_vars = torch.from_numpy(np.load(fn))
         if train:
             if 'ae' in args['arch']:
-                self.synth_vars[args['N_train']:] = -1
+                self.synth_vars[args['N_train']:,2] = -1
             else:
                 self.synth_vars = self.synth_vars[:args['N_train']]
 

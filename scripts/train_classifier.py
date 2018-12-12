@@ -86,7 +86,7 @@ def main(args):
         
     ds = dataset(train=True, args=args)
     train_loader = datasets.get_loader(ds, bsz=bsz)
-    assert args['N_train'] == len(ds), "Training set only has %d elements, N_train was specified as %d" % (len(ds), args['N_train'])
+    #assert args['N_train'] == len(ds), "Training set only has %d elements, N_train was specified as %d" % (len(ds), args['N_train'])
     train_zuy = ds.synth_vars
     
     ds = dataset(train=False, args=args)
@@ -249,7 +249,7 @@ def run_model(M, loader, args, optimizer=None, criterion=None, mc=False):
         
         if train:
             if 'ae' in args['arch']:
-                loss = criterion(pred[0], target) + args['w_recon']*torch.abs(pred[1] - imgs).mean()
+                loss = criterion(pred[0], target) + args['w_recon']*((pred[1] - imgs)**2).mean()
             else:
                 loss = criterion(pred, target)
             loss.backward()
